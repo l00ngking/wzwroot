@@ -16,11 +16,11 @@
 
 struct cred *ksu_cred;
 
-void sukisu_custom_config_init(void)
+void wzwroot_custom_config_init(void)
 {
 }
 
-void sukisu_custom_config_exit(void)
+void wzwroot_custom_config_exit(void)
 {
 }
 
@@ -45,7 +45,7 @@ int __init kernelsu_init(void)
 
     ksu_supercalls_init();
 
-    sukisu_custom_config_init();
+    wzwroot_custom_config_init();
 
     ksu_syscall_hook_manager_init();
 
@@ -78,7 +78,7 @@ void kernelsu_exit(void)
 
     ksu_syscall_hook_manager_exit();
 
-    sukisu_custom_config_exit();
+    wzwroot_custom_config_exit();
 
     ksu_supercalls_exit();
 

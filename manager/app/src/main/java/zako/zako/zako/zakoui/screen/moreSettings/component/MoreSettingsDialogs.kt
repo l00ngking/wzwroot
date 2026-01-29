@@ -22,8 +22,8 @@ import com.maxkeppeler.sheets.list.ListDialog
 import com.maxkeppeler.sheets.list.models.ListOption
 import com.maxkeppeler.sheets.list.models.ListSelection
 import zako.zako.zako.zakoui.screen.moreSettings.util.LocaleHelper
-import com.sukisu.ultra.R
-import com.sukisu.ultra.ui.theme.*
+import com.wzwroot.manager.R
+import com.wzwroot.manager.ui.theme.*
 import zako.zako.zako.zakoui.screen.moreSettings.MoreSettingsHandlers
 import zako.zako.zako.zakoui.screen.moreSettings.state.MoreSettingsState
 

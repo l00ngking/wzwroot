@@ -36,7 +36,7 @@ android {
             keyPassword = ""
         }
     }**/
-    namespace = "com.sukisu.ultra"
+    namespace = "com.wzwroot.manager"
 
     buildTypes {
         release {
@@ -82,7 +82,7 @@ android {
     applicationVariants.all {
         outputs.forEach {
             val output = it as BaseVariantOutputImpl
-            output.outputFileName = "SukiSU_${managerVersionName}_${managerVersionCode}-$name.apk"
+            output.outputFileName = "WZWRoot_${managerVersionName}_${managerVersionCode}-$name.apk"
         }
         kotlin.sourceSets {
             getByName(name) {

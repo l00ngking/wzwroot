@@ -33,11 +33,11 @@ import androidx.core.content.edit
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
-import com.sukisu.ultra.R
-import com.sukisu.ultra.ui.component.KeyEventBlocker
-import com.sukisu.ultra.ui.theme.CardConfig
-import com.sukisu.ultra.ui.util.LocalSnackbarHost
-import com.sukisu.ultra.ui.util.reboot
+import com.wzwroot.manager.R
+import com.wzwroot.manager.ui.component.KeyEventBlocker
+import com.wzwroot.manager.ui.theme.CardConfig
+import com.wzwroot.manager.ui.util.LocalSnackbarHost
+import com.wzwroot.manager.ui.util.reboot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

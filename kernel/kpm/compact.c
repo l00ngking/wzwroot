@@ -29,32 +29,32 @@
 #include "../allowlist.h"
 #include "../manager.h"
 
-static int sukisu_is_su_allow_uid(uid_t uid)
+static int wzwroot_is_su_allow_uid(uid_t uid)
 {
     return ksu_is_allow_uid_for_current(uid) ? 1 : 0;
 }
 
-static int sukisu_get_ap_mod_exclude(uid_t uid)
+static int wzwroot_get_ap_mod_exclude(uid_t uid)
 {
     return 0; /* Not supported */
 }
 
-static int sukisu_is_uid_should_umount(uid_t uid)
+static int wzwroot_is_uid_should_umount(uid_t uid)
 {
     return ksu_uid_should_umount(uid) ? 1 : 0;
 }
 
-static int sukisu_is_current_uid_manager(void)
+static int wzwroot_is_current_uid_manager(void)
 {
     return is_manager();
 }
 
-static uid_t sukisu_get_manager_uid(void)
+static uid_t wzwroot_get_manager_uid(void)
 {
     return ksu_manager_appid;
 }
 
-static void sukisu_set_manager_uid(uid_t uid, int force)
+static void wzwroot_set_manager_uid(uid_t uid, int force)
 {
     if (force || ksu_manager_appid == -1)
         ksu_manager_appid = uid;
@@ -65,21 +65,21 @@ struct CompactAddressSymbol {
     void *addr;
 };
 
-unsigned long sukisu_compact_find_symbol(const char *name);
+unsigned long wzwroot_compact_find_symbol(const char *name);
 
 static struct CompactAddressSymbol address_symbol[] = {
     { "kallsyms_lookup_name", &kallsyms_lookup_name },
-    { "compact_find_symbol", &sukisu_compact_find_symbol },
-    { "is_run_in_sukisu_ultra", (void *)1 },
-    { "is_su_allow_uid", &sukisu_is_su_allow_uid },
-    { "get_ap_mod_exclude", &sukisu_get_ap_mod_exclude },
-    { "is_uid_should_umount", &sukisu_is_uid_should_umount },
-    { "is_current_uid_manager", &sukisu_is_current_uid_manager },
-    { "get_manager_uid", &sukisu_get_manager_uid },
-    { "sukisu_set_manager_uid", &sukisu_set_manager_uid }
+    { "compact_find_symbol", &wzwroot_compact_find_symbol },
+    { "is_run_in_wzwroot_ultra", (void *)1 },
+    { "is_su_allow_uid", &wzwroot_is_su_allow_uid },
+    { "get_ap_mod_exclude", &wzwroot_get_ap_mod_exclude },
+    { "is_uid_should_umount", &wzwroot_is_uid_should_umount },
+    { "is_current_uid_manager", &wzwroot_is_current_uid_manager },
+    { "get_manager_uid", &wzwroot_get_manager_uid },
+    { "wzwroot_set_manager_uid", &wzwroot_set_manager_uid }
 };
 
-unsigned long sukisu_compact_find_symbol(const char *name)
+unsigned long wzwroot_compact_find_symbol(const char *name)
 {
     int i;
     unsigned long addr;
@@ -99,4 +99,4 @@ unsigned long sukisu_compact_find_symbol(const char *name)
 
     return 0;
 }
-EXPORT_SYMBOL(sukisu_compact_find_symbol);
+EXPORT_SYMBOL(wzwroot_compact_find_symbol);
