@@ -131,7 +131,7 @@ NativeBridge(getAppProfile, jobject, jstring pkg, jint uid) {
 
 	bool useDefaultProfile = get_app_profile(&profile) != 0;
 
-	jclass cls = GetEnvironment()->FindClass(env, "com/sukisu/ultra/Natives$Profile");
+	jclass cls = GetEnvironment()->FindClass(env, "com/wzwroot/manager/Natives$Profile");
 	jmethodID constructor = GetEnvironment()->GetMethodID(env, cls, "<init>", "()V");
 	jobject obj = GetEnvironment()->NewObject(env, cls, constructor);
 	jfieldID keyField = GetEnvironment()->GetFieldID(env, cls, "name", "Ljava/lang/String;");
@@ -207,7 +207,7 @@ NativeBridge(getAppProfile, jobject, jstring pkg, jint uid) {
 }
 
 NativeBridge(setAppProfile, jboolean, jobject profile) {
-	jclass cls = GetEnvironment()->FindClass(env, "com/sukisu/ultra/Natives$Profile");
+	jclass cls = GetEnvironment()->FindClass(env, "com/wzwroot/manager/Natives$Profile");
 
 	jfieldID keyField = GetEnvironment()->GetFieldID(env, cls, "name", "Ljava/lang/String;");
 	jfieldID currentUidField = GetEnvironment()->GetFieldID(env, cls, "currentUid", "I");
