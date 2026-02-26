@@ -24,8 +24,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavBackStackEntry
@@ -49,6 +51,8 @@ import com.wzwroot.manager.ui.activity.util.UltraActivityUtils
 import com.wzwroot.manager.ui.component.InstallConfirmationDialog
 import com.wzwroot.manager.ui.component.ZipFileInfo
 import com.wzwroot.manager.ui.screen.BottomBarDestination
+import com.wzwroot.manager.ui.screen.CardKeyManager
+import com.wzwroot.manager.ui.screen.CardKeyVerificationScreen
 import com.wzwroot.manager.ui.theme.KernelSUTheme
 import com.wzwroot.manager.ui.util.LocalSnackbarHost
 import com.wzwroot.manager.ui.util.install
@@ -93,7 +97,8 @@ class MainActivity : ComponentActivity() {
 
             super.onCreate(savedInstanceState)
 
-            val isManager = Natives.isManager
+            val ksuVersion = try { Natives.version } catch (_: Exception) { -1 }
+            val isManager = ksuVersion > 0 || try { Natives.isManager } catch (_: Exception) { false }
             if (isManager && !Natives.requireNewKernel()) {
                 install()
             }
@@ -140,6 +145,18 @@ class MainActivity : ComponentActivity() {
 
             setContent {
                 KernelSUTheme {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    var isCardKeyVerified by remember {
+                        mutableStateOf(CardKeyManager.isVerified(context))
+                    }
+
+                    if (!isCardKeyVerified) {
+                        CardKeyVerificationScreen(
+                            onVerified = { isCardKeyVerified = true }
+                        )
+                        return@KernelSUTheme
+                    }
+
                     val navController = rememberNavController()
                     val snackBarHostState = remember { SnackbarHostState() }
                     val currentDestination = navController.currentBackStackEntryAsState().value?.destination

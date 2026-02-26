@@ -121,13 +121,20 @@ class HomeViewModel : ViewModel() {
         val job = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val kernelVersion = getKernelVersion()
-                val isManager = try {
+
+                val version = try {
+                    Natives.version
+                } catch (_: Exception) {
+                    -1
+                }
+
+                val isManager = version > 0 || try {
                     Natives.isManager
                 } catch (_: Exception) {
                     false
                 }
 
-                val ksuVersion = if (isManager) Natives.version else null
+                val ksuVersion = if (version > 0) version else null
 
                 val fullVersion = try {
                     Natives.getFullVersion()

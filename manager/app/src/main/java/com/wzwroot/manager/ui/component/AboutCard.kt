@@ -88,9 +88,9 @@ private fun AboutCardContent() {
                     htmlString = stringResource(
                         id = R.string.about_source_code,
                         "<b><a href=\"https://github.com/l00ngking/wzwroot\">GitHub</a></b>",
-                        "<b><a href=\"https://github.com/l00ngking/wzwroot\">Telegram</a></b>",
-                        "<b>怡子曰曰</b>",
-                        "<b>明风 OuO</b>",
+                        "<b>Telegram</b>",
+                        "<b>MeloRoot</b>",
+                        "<b>MeloRoot Team</b>",
                         "<b><a href=\"https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.txt\">CC BY-NC-SA 4.0</a></b>"
                     ),
                     linkStyles = TextLinkStyles(

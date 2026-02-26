@@ -2,21 +2,36 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
+    android:viewportWidth="512"
+    android:viewportHeight="512">
     <group
-        android:scaleX="0.135"
-        android:scaleY="0.135">
-        <path
-            android:pathData="M 259 259 H 541 V 541 H 259 V 259 Z"
-            android:strokeWidth="18"
-            android:strokeColor="#000000" />
+        android:scaleX="0.6"
+        android:scaleY="0.6"
+        android:translateX="102"
+        android:translateY="80">
         <path
             android:fillColor="#000000"
-            android:pathData="M 257 257 H 407 V 407 H 257 V 257 Z" />
+            android:pathData="M230,60 C220,50 200,55 195,45 C190,35 200,25 210,30 C220,35 215,50 225,55 Z" />
         <path
             android:fillColor="#000000"
-            android:pathData="M 393 393 H 543 V 543 H 393 V 393 Z" />
+            android:pathData="M265,75 C280,50 310,40 320,55 C330,70 310,65 295,70 C280,75 270,80 265,75 Z" />
+        <path
+            android:fillColor="#000000"
+            android:pathData="M248,90 L252,90 L255,75 L260,65 L255,63 L248,73 L245,85 Z" />
+        <path
+            android:fillColor="#000000"
+            android:pathData="M256,95 C160,95 85,180 85,290 C85,400 160,485 256,485 C352,485 427,400 427,290 C427,180 352,95 256,95 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M180,110 C155,160 140,220 140,290 C140,360 155,420 180,470 Q190,475 200,465 C175,415 160,355 160,290 C160,225 175,165 200,115 Q190,105 180,110 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M240,95 C220,140 210,210 210,290 C210,370 220,440 240,485 Q250,488 260,483 C240,435 230,365 230,290 C230,215 240,145 260,97 Q250,93 240,95 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M310,97 C330,145 340,215 340,290 C340,365 330,435 310,483 Q320,488 330,485 C350,440 360,370 360,290 C360,210 350,140 330,95 Q320,93 310,97 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M375,115 C400,165 415,225 415,290 C415,355 400,415 375,465 Q385,475 395,470 C420,420 435,360 435,290 C435,220 420,160 395,110 Q385,105 375,115 Z" />
     </group>
 </vector>

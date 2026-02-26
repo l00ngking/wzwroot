@@ -187,11 +187,8 @@ fun HomeScreen(navigator: DestinationsNavigator) {
                         lkmMode = viewModel.systemStatus.lkmMode,
                     )
 
-                    // 链接卡片
                     if (!viewModel.isSimpleMode && !viewModel.isHideLinkCard) {
-                        ContributionCard()
-                        DonateCard()
-                        LearnMoreCard()
+                        AuthorSupportCard()
                     }
                 }
 
@@ -580,42 +577,8 @@ fun ContributionCard() {
 }
 
 @Composable
-fun LearnMoreCard() {
-    val uriHandler = LocalUriHandler.current
-    val url = stringResource(R.string.home_learn_kernelsu_url)
-
-    ElevatedCard(
-        colors = getCardColors(MaterialTheme.colorScheme.surfaceContainer),
-        elevation = CardDefaults.cardElevation(defaultElevation = cardElevation)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    uriHandler.openUri(url)
-                }
-                .padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = stringResource(R.string.home_learn_kernelsu),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.home_click_to_learn_kernelsu),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun DonateCard() {
-    val uriHandler = LocalUriHandler.current
+fun AuthorSupportCard() {
+    var showQrDialog by remember { mutableStateOf(false) }
 
     ElevatedCard(
         colors = getCardColors(MaterialTheme.colorScheme.surfaceContainer),
@@ -624,9 +587,7 @@ fun DonateCard() {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable {
-                    uriHandler.openUri("https://patreon.com/weishu")
-                }
+                .clickable { showQrDialog = true }
                 .padding(24.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -643,6 +604,43 @@ fun DonateCard() {
                 )
             }
         }
+    }
+
+    if (showQrDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showQrDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.home_support_title),
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = stringResource(R.string.home_support_content),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    androidx.compose.foundation.Image(
+                        painter = androidx.compose.ui.res.painterResource(R.drawable.author_qrcode),
+                        contentDescription = "Author QR Code",
+                        modifier = Modifier.size(250.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { showQrDialog = false }
+                ) {
+                    Text(stringResource(R.string.close))
+                }
+            },
+            shape = MaterialTheme.shapes.extraLarge
+        )
     }
 }
 

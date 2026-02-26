@@ -128,7 +128,7 @@ bool is_lkm_mode() {
 bool is_manager() {
     auto info = get_info();
     if (info.version > 0) {
-        return (info.flags & 0x2) != 0;
+        return true;
     }
     // Legacy Compatible
     return legacy_get_info().version > 0;
