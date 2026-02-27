@@ -10,14 +10,8 @@
 #include <dirent.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <sys/syscall.h>
-#include <errno.h>
-
 #include "prelude.h"
 #include "ksu.h"
-
-#define KSU_INSTALL_MAGIC1 0xDEADBEEF
-#define KSU_INSTALL_MAGIC2 0xCAFEBABE
 
 #if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__) || defined(_M_ARM)
 
@@ -74,18 +68,12 @@ static inline int scan_driver_fd() {
 	return found;
 }
 
-static void request_driver_fd() {
-	int fd_out = -1;
-	syscall(__NR_reboot, KSU_INSTALL_MAGIC1, KSU_INSTALL_MAGIC2, 0, &fd_out);
-}
-
 static int ksuctl(unsigned long op, void* arg) {
 	if (fd < 0) {
 		fd = scan_driver_fd();
 	}
 	if (fd < 0) {
-		request_driver_fd();
-		fd = scan_driver_fd();
+		return -1;
 	}
 	return ioctl(fd, op, arg);
 }
