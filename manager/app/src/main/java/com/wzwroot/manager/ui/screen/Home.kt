@@ -135,10 +135,16 @@ fun HomeScreen(navigator: DestinationsNavigator) {
             ) {
                 // 状态卡片
                 if (viewModel.isCoreDataLoaded) {
+                    val context = LocalContext.current
                     StatusCard(
                         systemStatus = viewModel.systemStatus,
                         onClickInstall = {
                             navigator.navigate(InstallScreenDestination(preselectedKernelUri = null))
+                        },
+                        onConfirmKsu = {
+                            context.getSharedPreferences("meloroot_settings", Context.MODE_PRIVATE)
+                                .edit().putBoolean("ksu_manually_confirmed", true).apply()
+                            viewModel.refreshData(context)
                         }
                     )
 
@@ -344,7 +350,8 @@ private fun TopBar(
 @Composable
 private fun StatusCard(
     systemStatus: HomeViewModel.SystemStatus,
-    onClickInstall: () -> Unit = {}
+    onClickInstall: () -> Unit = {},
+    onConfirmKsu: () -> Unit = {}
 ) {
     ElevatedCard(
         colors = getCardColors(
@@ -357,8 +364,12 @@ private fun StatusCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                    if (systemStatus.isRootAvailable || systemStatus.kernelVersion.isGKI()) {
-                        onClickInstall()
+                    if (systemStatus.ksuVersion != null) {
+                        if (systemStatus.isRootAvailable || systemStatus.kernelVersion.isGKI()) {
+                            onClickInstall()
+                        }
+                    } else if (systemStatus.kernelVersion.isGKI()) {
+                        onConfirmKsu()
                     }
                 }
                 .padding(24.dp),
@@ -477,9 +488,9 @@ private fun StatusCard(
 
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = stringResource(R.string.home_click_to_install),
+                            text = "\u5DF2\u5237\u5165KernelSU\u5185\u6838\uFF1F\u70B9\u51FB\u786E\u8BA4",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

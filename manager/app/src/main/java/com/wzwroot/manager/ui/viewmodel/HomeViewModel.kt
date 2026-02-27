@@ -134,8 +134,12 @@ class HomeViewModel : ViewModel() {
                     false
                 }
 
-                val ksuDetected = if (version <= 0) detectKsuPresence() else false
-                val ksuVersion = if (version > 0) version else if (ksuDetected) 1 else null
+                val manualKsuConfirmed = try {
+                    ksuApp.getSharedPreferences("meloroot_settings", android.content.Context.MODE_PRIVATE)
+                        .getBoolean("ksu_manually_confirmed", false)
+                } catch (_: Throwable) { false }
+
+                val ksuVersion = if (version > 0) version else if (manualKsuConfirmed) 1 else null
 
                 val fullVersion = try {
                     Natives.getFullVersion()
@@ -565,29 +569,6 @@ class HomeViewModel : ViewModel() {
         val third: T3,
         val fourth: T4
     )
-
-    private fun detectKsuPresence(): Boolean {
-        return try {
-            val indicators = listOf(
-                "/data/adb/ksud",
-                "/data/adb/ksu",
-                "/data/adb/ksu/bin/ksud",
-                "/system/bin/su"
-            )
-            indicators.any { path ->
-                try { java.io.File(path).exists() } catch (_: Throwable) { false }
-            }
-        } catch (_: Throwable) {
-            false
-        } || try {
-            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", "which su"))
-            val result = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor()
-            result.isNotEmpty() && result.contains("su")
-        } catch (_: Throwable) {
-            false
-        }
-    }
 
     override fun onCleared() {
         super.onCleared()
