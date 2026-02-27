@@ -32,10 +32,10 @@ import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 
 enum class AppCategory(val displayNameRes: Int, val persistKey: String) {
-    ALL(com.sukisu.ultra.R.string.category_all_apps, "ALL"),
-    ROOT(com.sukisu.ultra.R.string.category_root_apps, "ROOT"),
-    CUSTOM(com.sukisu.ultra.R.string.category_custom_apps, "CUSTOM"),
-    DEFAULT(com.sukisu.ultra.R.string.category_default_apps, "DEFAULT");
+    ALL(com.wzwroot.manager.R.string.category_all_apps, "ALL"),
+    ROOT(com.wzwroot.manager.R.string.category_root_apps, "ROOT"),
+    CUSTOM(com.wzwroot.manager.R.string.category_custom_apps, "CUSTOM"),
+    DEFAULT(com.wzwroot.manager.R.string.category_default_apps, "DEFAULT");
 
     companion object {
         fun fromPersistKey(key: String): AppCategory = entries.find { it.persistKey == key } ?: ALL
@@ -43,13 +43,13 @@ enum class AppCategory(val displayNameRes: Int, val persistKey: String) {
 }
 
 enum class SortType(val displayNameRes: Int, val persistKey: String) {
-    NAME_ASC(com.sukisu.ultra.R.string.sort_name_asc, "NAME_ASC"),
-    NAME_DESC(com.sukisu.ultra.R.string.sort_name_desc, "NAME_DESC"),
-    INSTALL_TIME_NEW(com.sukisu.ultra.R.string.sort_install_time_new, "INSTALL_TIME_NEW"),
-    INSTALL_TIME_OLD(com.sukisu.ultra.R.string.sort_install_time_old, "INSTALL_TIME_OLD"),
-    SIZE_DESC(com.sukisu.ultra.R.string.sort_size_desc, "SIZE_DESC"),
-    SIZE_ASC(com.sukisu.ultra.R.string.sort_size_asc, "SIZE_ASC"),
-    USAGE_FREQ(com.sukisu.ultra.R.string.sort_usage_freq, "USAGE_FREQ");
+    NAME_ASC(com.wzwroot.manager.R.string.sort_name_asc, "NAME_ASC"),
+    NAME_DESC(com.wzwroot.manager.R.string.sort_name_desc, "NAME_DESC"),
+    INSTALL_TIME_NEW(com.wzwroot.manager.R.string.sort_install_time_new, "INSTALL_TIME_NEW"),
+    INSTALL_TIME_OLD(com.wzwroot.manager.R.string.sort_install_time_old, "INSTALL_TIME_OLD"),
+    SIZE_DESC(com.wzwroot.manager.R.string.sort_size_desc, "SIZE_DESC"),
+    SIZE_ASC(com.wzwroot.manager.R.string.sort_size_asc, "SIZE_ASC"),
+    USAGE_FREQ(com.wzwroot.manager.R.string.sort_usage_freq, "USAGE_FREQ");
 
     companion object {
         fun fromPersistKey(key: String): SortType = entries.find { it.persistKey == key } ?: NAME_ASC
