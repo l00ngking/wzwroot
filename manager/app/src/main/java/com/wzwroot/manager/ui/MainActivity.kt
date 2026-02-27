@@ -97,9 +97,9 @@ class MainActivity : ComponentActivity() {
 
             super.onCreate(savedInstanceState)
 
-            val ksuVersion = try { Natives.version } catch (_: Exception) { -1 }
-            val isManager = ksuVersion > 0 || try { Natives.isManager } catch (_: Exception) { false }
-            if (isManager && !Natives.requireNewKernel()) {
+            val ksuVersion = try { Natives.version } catch (_: Throwable) { -1 }
+            val isManager = ksuVersion > 0 || try { Natives.isManager } catch (_: Throwable) { false }
+            if (isManager && try { !Natives.requireNewKernel() } catch (_: Throwable) { true }) {
                 install()
             }
 

@@ -124,13 +124,13 @@ class HomeViewModel : ViewModel() {
 
                 val version = try {
                     Natives.version
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     -1
                 }
 
                 val isManager = version > 0 || try {
                     Natives.isManager
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     false
                 }
 
