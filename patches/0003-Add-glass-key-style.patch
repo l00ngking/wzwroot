@@ -1,7 +1,7 @@
 From 039d841f2930198b148e585fcbf0c4987cb1ab39 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 30 Oct 2026 16:14:11 +0000
-Subject: [PATCH 3/4] Add glass key style
+Subject: [PATCH 3/6] Add glass key style
 
 A custom drawable for keys: translucent body, sheen, specular rim and soft
 shadow, enabled by a new "Glass key style" switch (needs key border). Also

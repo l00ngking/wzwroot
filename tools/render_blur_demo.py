@@ -214,7 +214,8 @@ def glass_key(layer, box, r, rgb, dark, accent=False, backdrop=None):
     """Draw one key. All sizes are in supersampled pixels. Mirrors GlassKeyDrawable.draw().
     Works on a small local canvas, the full layer is far too big for per-key numpy work."""
     g = GLASS[dark]
-    pad = int(14 * SS)
+    u = DENSITY / 2.6  # the constants below were tuned at 2.6
+    pad = int(14 * SS * u)
     ox, oy = int(box[0]) - pad, int(box[1]) - pad
     x0, y0, x1, y1 = box[0] - ox, box[1] - oy, box[2] - ox, box[3] - oy
     size = (int(x1 + pad), int(y1 + pad))
@@ -226,8 +227,8 @@ def glass_key(layer, box, r, rgb, dark, accent=False, backdrop=None):
 
     # 1. soft shadow below the key (stacked rounded rects, no real blur needed)
     for i in range(1, 6):
-        grow = i * 1.1 * SS
-        m = rrect_mask(size, (x0 - grow, y0 - grow + 2.6 * SS, x1 + grow, y1 + grow + 2.6 * SS), r + grow)
+        grow = i * 1.1 * SS * u
+        m = rrect_mask(size, (x0 - grow, y0 - grow + 2.6 * SS * u, x1 + grow, y1 + grow + 2.6 * SS * u), r + grow)
         over(local, paint(size, (0, 0, 0), g["shadow"] * (1 - i / 6) * 0.55, m))
 
     # 2. glass body: vertical alpha gradient of the key color
@@ -246,12 +247,13 @@ def glass_key(layer, box, r, rgb, dark, accent=False, backdrop=None):
     over(local, paint(size, rgb, top + (bot - top) * ty, body))
 
     # 3. sheen over the upper half
-    sh = rrect_mask(size, (x0 + 1.5 * SS, y0 + 1.5 * SS, x1 - 1.5 * SS, y1 - 1.5 * SS), r - 1.5 * SS)
+    sh = rrect_mask(size, (x0 + 1.5 * SS * u, y0 + 1.5 * SS * u, x1 - 1.5 * SS * u, y1 - 1.5 * SS * u),
+                    max(r - 1.5 * SS * u, 1))
     over(local, paint(size, (255, 255, 255), g["sheen"] * np.clip(1 - ty / 0.5, 0, 1) ** 1.5, sh))
 
     # 4. dark hairline just outside (light mode only)
     if g["hairline"]:
-        outer = np.asarray(rrect_mask(size, (x0 - SS, y0 - SS, x1 + SS, y1 + SS), r + SS), np.int16)
+        outer = np.asarray(rrect_mask(size, (x0 - SS * u, y0 - SS * u, x1 + SS * u, y1 + SS * u), r + SS * u), np.int16)
         ring = Image.fromarray(np.clip(outer - np.asarray(body, np.int16), 0, 255).astype(np.uint8))
         over(local, paint(size, (40, 50, 80), g["hairline"], ring))
 
@@ -266,21 +268,46 @@ def glass_key(layer, box, r, rgb, dark, accent=False, backdrop=None):
     layer.alpha_composite(local, (ox, oy))
 
 
-def glass_keyboard(palette: dict, dark: bool, backdrop=None) -> Image.Image:
+class Metrics:
+    """Pixel sizes of a keyboard. `scale` is TabletLayout.scale(): labels and the candidate bar grow
+    on large screens. Rows are laid out inside `keys_h`, the candidate bar sits above."""
+
+    def __init__(self, canvas_w, keyboard_w, density, bar_dp, keys_h_px, scale=1.0, radius_dp=6.0):
+        self.W, self.kb_w, self.density, self.scale = canvas_w, keyboard_w, density, scale
+        self.kb_left = (canvas_w - keyboard_w) // 2
+        self.bar_h = round(bar_dp * density)
+        self.row_h = keys_h_px / 4
+        self.H = self.bar_h + keys_h_px + round(6 * density)  # a little room below the last row
+        self.gap_x = 2.7 * density
+        self.gap_y = 4.6 * density
+        self.radius = radius_dp * density
+        self.label = 18.5 * scale * density
+        self.small = 13.1 * scale * density
+        self.cand = 17.7 * scale * density
+
+
+def glass_keyboard(palette: dict, dark: bool, backdrop=None, m=None) -> Image.Image:
     """Candidate bar + glass keys on a transparent layer."""
+    global DENSITY
+    m = m or PHONE
+    DENSITY = m.density
     s = SS
-    layer = Image.new("RGBA", (W * s, KB_H * s))
+    layer = Image.new("RGBA", (m.W * s, int(m.H) * s))
     d = ImageDraw.Draw(layer)
     txt = bt.rgba(palette["keyTextColor"])
-    bar_h = 120
+    bar_h = m.bar_h
     for i, word in enumerate(("Liquid", "Glass", "glassy", "glance")):
-        d.text(((48 + i * 235) * s, bar_h // 2 * s), word, font=font(46 * s), anchor="lm", fill=txt)
-    d.line([(0, bar_h * s), (W * s, bar_h * s)], fill=(255, 255, 255, 60 if dark else 110), width=2 * s)
+        d.text(((m.kb_left + 18 * m.density + i * 90 * m.density) * s, bar_h // 2 * s), word,
+               font=font(int(m.cand * s)), anchor="lm", fill=txt)
+    d.line([(m.kb_left * s, bar_h * s), ((m.kb_left + m.kb_w) * s, bar_h * s)],
+           fill=(255, 255, 255, 60 if dark else 110), width=2 * s)
 
     rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
-    m, top, rh = 10, bar_h + 22, 176
-    kw = (W - 2 * m) / 10
-    r = 50 * s
+    side = 4 * m.density / 2.6
+    left, right = m.kb_left + side, m.kb_left + m.kb_w - side
+    top, rh = bar_h + 8 * m.density / 2.6, m.row_h
+    kw = (right - left) / 10
+    r = m.radius * s
 
     def rgb_of(c):  # the app takes the RGB of the theme's key colors, the alpha comes from GlassKeyDrawable
         return ((c >> 16) & 255, (c >> 8) & 255, c & 255)
@@ -289,33 +316,37 @@ def glass_keyboard(palette: dict, dark: bool, backdrop=None) -> Image.Image:
     fn_rgb = rgb_of(palette["altKeyBackgroundColor"])
     blue = rgb_of(palette["accentKeyBackgroundColor"])
 
-    def key(x0, y0, x1, y1, label, rgb, color=txt, size=48, accent=False):
-        box = ((x0 + 7) * s, (y0 + 12) * s, (x1 - 7) * s, (y1 - 12) * s)
+    def key(x0, y0, x1, y1, label, rgb, color=txt, small=False, accent=False):
+        box = ((x0 + m.gap_x) * s, (y0 + m.gap_y / 2) * s, (x1 - m.gap_x) * s, (y1 - m.gap_y / 2) * s)
         glass_key(layer, box, r, rgb, dark, accent, backdrop)
         ImageDraw.Draw(layer).text(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), label,
-                                   font=font(size * s), anchor="mm", fill=color)
+                                   font=font(int((m.small if small else m.label) * s)), anchor="mm", fill=color)
 
     for ri, row in enumerate(rows):
         y = top + ri * rh
         if ri == 2:
-            key(m, y, m + kw * 1.5, y + rh, "⇧", fn_rgb)
-            x = m + kw * 1.5
+            key(left, y, left + kw * 1.5, y + rh, "⇧", fn_rgb)
+            x = left + kw * 1.5
             for ch in row:
                 key(x, y, x + kw, y + rh, ch, white)
                 x += kw
-            key(x, y, W - m, y + rh, "⌫", fn_rgb)
+            key(x, y, right, y + rh, "⌫", fn_rgb)
         else:
-            x = m + (W - 2 * m - kw * len(row)) / 2
+            x = left + (right - left - kw * len(row)) / 2
             for ch in row:
                 key(x, y, x + kw, y + rh, ch, white)
                 x += kw
     y = top + 3 * rh
-    key(m, y, m + kw * 1.5, y + rh, "123", fn_rgb, size=34)
-    key(m + kw * 1.5, y, m + kw * 2.5, y + rh, ",", fn_rgb)
-    key(m + kw * 2.5, y, m + kw * 7, y + rh, "space", white, size=34)
-    key(m + kw * 7, y, m + kw * 8, y + rh, ".", fn_rgb)
-    key(m + kw * 8, y, W - m, y + rh, "return", blue, (255, 255, 255, 255), 34, accent=True)
-    return layer.resize((W, KB_H), Image.LANCZOS)
+    key(left, y, left + kw * 1.5, y + rh, "123", fn_rgb, small=True)
+    key(left + kw * 1.5, y, left + kw * 2.5, y + rh, ",", fn_rgb)
+    key(left + kw * 2.5, y, left + kw * 7, y + rh, "space", white, small=True)
+    key(left + kw * 7, y, left + kw * 8, y + rh, ".", fn_rgb)
+    key(left + kw * 8, y, right, y + rh, "return", blue, (255, 255, 255, 255), True, accent=True)
+    return layer.resize((m.W, int(m.H)), Image.LANCZOS)
+
+
+# phone: 1080 px wide at 2.6x, rows as before; the bar is 40dp, keys area 4 rows of 176 px
+PHONE = Metrics(W, W, 2.6, 40, KB_H - round(40 * 2.6) - round(6 * 2.6))
 
 
 # ------------------------------------------------------------------ backdrop + compose
@@ -329,22 +360,25 @@ def static_background(palette):
     return bt.glassify(bt.default_backdrop(dark), dark).resize((W, KB_H))
 
 
-def blurred_backdrop(app: Image.Image, dark: bool) -> Image.Image:
+def blurred_backdrop(app: Image.Image, dark: bool, kb_h=None, sigma=BLUR_SIGMA) -> Image.Image:
     """GlassBackdrop: the content behind the keyboard, blurred, plus a light tint and a rim."""
-    pad = BLUR_SIGMA * 3
-    ctx = app.crop((0, max(0, KB_Y - pad), W, H)).filter(ImageFilter.GaussianBlur(BLUR_SIGMA))
-    region = ctx.crop((0, ctx.height - KB_H, W, ctx.height)).convert("RGBA")
+    kb_h = kb_h or KB_H
+    w, h = app.size
+    pad = sigma * 3
+    ctx = app.crop((0, max(0, h - kb_h - pad), w, h)).filter(ImageFilter.GaussianBlur(sigma))
+    region = ctx.crop((0, ctx.height - kb_h, w, ctx.height)).convert("RGBA")
     base = (28, 28, 30) if dark else (240, 242, 250)
     tint = Image.new("RGBA", region.size, base + (0x55 if dark else 0x5C,))
     out = Image.alpha_composite(region, tint)
-    out.alpha_composite(Image.new("RGBA", (W, 2), (255, 255, 255, 0x40 if dark else 0xB0)), (0, 0))
+    out.alpha_composite(Image.new("RGBA", (w, 2), (255, 255, 255, 0x40 if dark else 0xB0)), (0, 0))
     return out.convert("RGB")
 
 
 def compose(app, kb_bg, kb_layer):
     img = app.copy().convert("RGBA")
-    img.paste(kb_bg.convert("RGBA"), (0, KB_Y))
-    img.alpha_composite(kb_layer, (0, KB_Y))
+    y = app.height - kb_bg.height
+    img.paste(kb_bg.convert("RGBA"), (0, y))
+    img.alpha_composite(kb_layer, (0, y))
     return img.convert("RGB")
 
 
@@ -356,6 +390,66 @@ def caption(img, text, sub):
     d.text((img.width // 2, 52), text, font=font(54, True), fill=(255, 255, 255), anchor="mm")
     d.text((img.width // 2, 110), sub, font=font(34, True), fill=(170, 170, 180), anchor="mm")
     return out
+
+
+def mock_app_tablet(dark: bool, w: int, h: int) -> Image.Image:
+    """A landscape tablet: contact list on the left, chat on the right, wallpaper behind everything."""
+    if dark:
+        blobs = [(0.1, 0.1, 0.7, (88, 54, 220)), (0.95, 0.35, 0.6, (210, 40, 120)),
+                 (0.2, 0.9, 0.6, (0, 130, 230)), (0.7, 0.95, 0.6, (255, 120, 40))]
+        base = (20, 20, 40)
+    else:
+        blobs = [(0.1, 0.1, 0.7, (130, 180, 255)), (0.95, 0.35, 0.6, (255, 140, 190)),
+                 (0.2, 0.9, 0.6, (110, 220, 255)), (0.7, 0.95, 0.6, (255, 190, 90))]
+        base = (235, 238, 250)
+    img = mesh(w, h, blobs, base)
+    d = ImageDraw.Draw(img, "RGBA")
+    fg = (255, 255, 255, 255) if dark else (28, 28, 30, 255)
+    panel = (255, 255, 255, 40) if dark else (255, 255, 255, 150)
+    d.text((60, 36), "9:41", font=font(40), fill=fg)
+    d.rounded_rectangle((40, 110, 560, h - 40), 36, fill=panel)
+    names = ["Aurora", "Beam", "Cedar", "Dune", "Ember", "Fjord", "Grove"]
+    for i, n in enumerate(names):
+        y = 140 + i * 150
+        d.ellipse((70, y, 150, y + 80), fill=(255, 255, 255, 230))
+        d.text((175, y + 6), n, font=font(40), fill=fg)
+        d.text((175, y + 52), "好的,晚点见" if i % 2 else "看看这张照片", font=font(30, True), fill=fg[:3] + (150,))
+    d.rounded_rectangle((600, 110, w - 40, h - 40), 36, fill=panel)
+    me, them = (10, 132, 255, 255), ((255, 255, 255, 215) if not dark else (255, 255, 255, 70))
+    texts = [(0, "今晚看极光吗?"), (1, "走!我带相机"), (0, "拍到了这张"), (1, "太美了!"),
+             (0, "再来一张"), (1, "好呀"), (0, "凌晨三点见")]
+    for i, (mine, t) in enumerate(texts):
+        bw = 120 + len(t) * 60
+        x = (w - 40 - 40 - bw) if mine else 640
+        y = 150 + i * 170
+        d.rounded_rectangle((x, y, x + bw, y + 110), 40, fill=me if mine else them)
+        d.text((x + 36, y + 55), t, font=font(40, True), anchor="lm", fill=(255, 255, 255, 255) if mine else fg)
+    return img
+
+
+def tablet_demo(out_dir):
+    global DENSITY
+    TW, TH, density = 2560, 1600, 2.0
+    for name in ("LiquidGlassLight", "LiquidGlassDark"):
+        palette = bt.PALETTES[name]
+        dark = palette["isDark"]
+        app = mock_app_tablet(dark, TW, TH)
+        # before: the phone layout stretched over the whole width, rows from the percentage preference
+        m0 = Metrics(TW, TW, density, 40, round(TH * 0.49), scale=1.0)
+        # after: TabletLayout, 900dp wide, 340dp of keys, a 48dp candidate bar, 1.2x labels
+        m1 = Metrics(TW, round(900 * density), density, 48, round(340 * density), scale=1.2)
+        shots = []
+        for m in (m0, m1):
+            bg = blurred_backdrop(app, dark, int(m.H), sigma=round(16 * density))
+            shots.append(compose(app, bg, glass_keyboard(palette, dark, None, m)))
+        a = caption(shots[0], "之前 · 手机布局拉伸到整个宽度", "键宽 250px 以上,键盘整个横屏占掉半个屏幕")
+        b = caption(shots[1], "之后 · 平板布局", "最大宽度 900dp 居中,键高 340dp,字号和候选栏放大 1.2 倍")
+        sheet = Image.new("RGB", (a.width, a.height * 2 + 30), (24, 24, 27))
+        sheet.paste(a, (0, 0))
+        sheet.paste(b, (0, a.height + 30))
+        sheet = sheet.resize((sheet.width // 2, sheet.height // 2), Image.LANCZOS)
+        sheet.save(out_dir / f"demo_tablet_{name}.png", optimize=True)
+        print("wrote tablet", name)
 
 
 def main():
@@ -401,4 +495,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--tablet" in sys.argv:
+        tablet_demo(Path(__file__).resolve().parent.parent / "preview")
+    else:
+        main()
+        tablet_demo(Path(__file__).resolve().parent.parent / "preview")

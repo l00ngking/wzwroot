@@ -1,0 +1,332 @@
+From f31af82f74921fd7f5fa92cbef537487294529f0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 17:56:44 +0000
+Subject: [PATCH 5/6] Adapt the keyboard to tablets
+
+On screens 600dp wide and more (or when forced in the theme settings) the keyboard
+is limited to a maximum width (default 900dp) and centered, the keys area is kept
+between 240dp and 340dp high, and key labels, the candidate bar and key popups are
+scaled up by 1.2.
+---
+ .../fcitx5/android/data/theme/ThemePrefs.kt   | 13 ++++
+ .../fcitx/fcitx5/android/input/InputView.kt   | 12 +++-
+ .../fcitx5/android/input/TabletLayout.kt      | 67 +++++++++++++++++++
+ .../android/input/bar/KawaiiBarComponent.kt   |  7 +-
+ .../fcitx5/android/input/bar/ui/IdleUi.kt     |  4 +-
+ .../android/input/bar/ui/idle/NumberRow.kt    |  4 +-
+ .../fcitx5/android/input/keyboard/KeyView.kt  |  3 +-
+ .../android/input/popup/PopupComponent.kt     |  7 +-
+ app/src/main/res/values-zh-rCN/strings.xml    |  5 ++
+ app/src/main/res/values/strings.xml           |  5 ++
+ 10 files changed, 113 insertions(+), 14 deletions(-)
+ create mode 100644 app/src/main/java/org/fcitx/fcitx5/android/input/TabletLayout.kt
+
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+index 2c04f1f..cd261d2 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+@@ -43,6 +43,19 @@ class ThemePrefs(sharedPreferences: SharedPreferences) :
+ 
+     val keyRippleEffect = switch(R.string.key_ripple_effect, "key_ripple_effect", false)
+ 
++    enum class TabletMode(override val stringRes: Int) : ManagedPreferenceEnum {
++        Auto(R.string.tablet_mode_auto),
++        On(R.string.tablet_mode_on),
++        Off(R.string.tablet_mode_off);
++    }
++
++    val tabletMode = enumList(R.string.tablet_mode, "tablet_mode", TabletMode.Auto)
++
++    val tabletMaxWidth = int(
++        R.string.tablet_max_width, "tablet_max_width", 900, 480, 1600, "dp", 20,
++        enableUiOn = { tabletMode.getValue() != TabletMode.Off }
++    )
++
+     val glassBlur = switch(
+         R.string.glass_blur, "glass_blur", false,
+         summary = R.string.glass_blur_summary,
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+index ef21d86..77b53f7 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+@@ -192,7 +192,7 @@ class InputView(
+                 else -> keyboardHeightPercent
+             }.getValue()
+             Timber.d("keyboardHeightPx get(): baseType=${baseType}, base=${base}, percent=${percent}")
+-            return base * percent / 100
++            return TabletLayout.keysHeightPx(context, base * percent / 100, base)
+         }
+ 
+     private val keyboardSidePaddingPx: Int
+@@ -201,7 +201,7 @@ class InputView(
+                 Configuration.ORIENTATION_LANDSCAPE -> keyboardSidePaddingLandscape
+                 else -> keyboardSidePadding
+             }.getValue()
+-            return dp(value)
++            return dp(value) + TabletLayout.extraSidePaddingPx(context, width, dp(value))
+         }
+ 
+     private val keyboardBottomPaddingPx: Int
+@@ -255,7 +255,7 @@ class InputView(
+                 centerVertically()
+                 centerHorizontally()
+             })
+-            add(kawaiiBar.view, lParams(matchParent, dp(KawaiiBarComponent.HEIGHT)) {
++            add(kawaiiBar.view, lParams(matchParent, dp(TabletLayout.barHeightDp(context))) {
+                 topOfParent()
+                 centerHorizontally()
+             })
+@@ -350,6 +350,12 @@ class InputView(
+         kawaiiBar.view.setPadding(sidePadding, 0, sidePadding, 0)
+     }
+ 
++    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
++        super.onSizeChanged(w, h, oldw, oldh)
++        // the side padding of a wide keyboard depends on the width of this view
++        if (w != oldw && TabletLayout.isLarge(context)) updateKeyboardSize()
++    }
++
+     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
+         bottomPaddingSpace.updateLayoutParams<LayoutParams> {
+             bottomMargin = getNavBarBottomInset(insets)
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/TabletLayout.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/TabletLayout.kt
+new file mode 100644
+index 0000000..4102d55
+--- /dev/null
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/TabletLayout.kt
+@@ -0,0 +1,67 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2025 Fcitx5 for Android Contributors
++ */
++
++package org.fcitx.fcitx5.android.input
++
++import android.content.Context
++import org.fcitx.fcitx5.android.data.theme.ThemeManager
++import org.fcitx.fcitx5.android.data.theme.ThemePrefs.TabletMode
++import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
++import splitties.dimensions.dp
++import kotlin.math.min
++
++/**
++ * Sizes for large screens (tablets, unfolded foldables).
++ *
++ * The phone layout stretches to the full width, which on a 10" tablet in landscape gives keys that
++ * are more than 100dp wide and a keyboard that is out of thumb reach. Here the keyboard is limited
++ * to [ThemePrefs.tabletMaxWidth][org.fcitx.fcitx5.android.data.theme.ThemePrefs.tabletMaxWidth] and
++ * centered, and everything that is measured in dp (labels, candidate bar, key popups) is scaled up.
++ */
++object TabletLayout {
++
++    private const val LARGE_SMALLEST_WIDTH_DP = 600
++    private const val SCALE = 1.2f
++    private const val BAR_HEIGHT_DP = 48
++    private const val MIN_KEYS_HEIGHT_DP = 240
++    private const val MAX_KEYS_HEIGHT_DP = 340
++
++    fun isLarge(context: Context): Boolean = when (ThemeManager.prefs.tabletMode.getValue()) {
++        TabletMode.Auto -> context.resources.configuration.smallestScreenWidthDp >= LARGE_SMALLEST_WIDTH_DP
++        TabletMode.On -> true
++        TabletMode.Off -> false
++    }
++
++    /**
++     * Factor for sizes that are given in dp or sp
++     */
++    fun scale(context: Context): Float = if (isLarge(context)) SCALE else 1f
++
++    fun barHeightDp(context: Context): Int =
++        if (isLarge(context)) BAR_HEIGHT_DP else KawaiiBarComponent.HEIGHT
++
++    /**
++     * Padding to add on each side so that the keyboard is not wider than the maximum width.
++     */
++    fun extraSidePaddingPx(context: Context, viewWidthPx: Int, userSidePaddingPx: Int): Int {
++        if (!isLarge(context) || viewWidthPx <= 0) return 0
++        val maxWidth = context.dp(ThemeManager.prefs.tabletMaxWidth.getValue())
++        val available = viewWidthPx - 2 * userSidePaddingPx
++        return if (available > maxWidth) (available - maxWidth) / 2 else 0
++    }
++
++    /**
++     * The height from the percentage preference is relative to the screen height. In landscape that
++     * is a keyboard that covers half of a tablet, and a 900dp wide keyboard with such rows has keys
++     * that are wider than tall; in portrait on a big tablet it is too tall as well. Keys of about
++     * 85dp, close to square, are comfortable, so the height is kept between 240dp and 340dp.
++     */
++    fun keysHeightPx(context: Context, fromPercentPx: Int, screenHeightPx: Int): Int {
++        if (!isLarge(context)) return fromPercentPx
++        val atMost = min(context.dp(MAX_KEYS_HEIGHT_DP), (screenHeightPx * 0.55f).toInt())
++        val atLeast = min(context.dp(MIN_KEYS_HEIGHT_DP), atMost)
++        return fromPercentPx.coerceIn(atLeast, atMost)
++    }
++}
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/KawaiiBarComponent.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/KawaiiBarComponent.kt
+index fe90eda..16c0408 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/KawaiiBarComponent.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/KawaiiBarComponent.kt
+@@ -35,6 +35,7 @@ import org.fcitx.fcitx5.android.data.clipboard.db.ClipboardEntry
+ import org.fcitx.fcitx5.android.data.prefs.AppPrefs
+ import org.fcitx.fcitx5.android.data.prefs.ManagedPreference
+ import org.fcitx.fcitx5.android.data.theme.ThemeManager
++import org.fcitx.fcitx5.android.input.TabletLayout
+ import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.State.ClickToAttachWindow
+ import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.State.ClickToDetachWindow
+ import org.fcitx.fcitx5.android.input.bar.ExpandButtonStateMachine.State.Hidden
+@@ -286,7 +287,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
+             hideKeyboardButton.apply {
+                 setOnClickListener(hideKeyboardCallback)
+                 swipeEnabled = true
+-                swipeThresholdY = dp(HEIGHT.toFloat())
++                swipeThresholdY = dp(TabletLayout.barHeightDp(context).toFloat())
+                 swipeThresholdX = swipeThresholdY
+                 onGestureListener = swipeHideKeyboardCallback
+             }
+@@ -337,7 +338,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
+         CandidateUi(context, theme, horizontalCandidate.view).apply {
+             expandButton.apply {
+                 swipeEnabled = true
+-                swipeThresholdY = dp(HEIGHT.toFloat())
++                swipeThresholdY = dp(TabletLayout.barHeightDp(context).toFloat())
+                 onGestureListener = swipeDownExpandCallback
+             }
+         }
+@@ -478,7 +479,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
+     }
+ 
+     private val suggestionSize by lazy {
+-        Size(ViewGroup.LayoutParams.WRAP_CONTENT, context.dp(HEIGHT))
++        Size(ViewGroup.LayoutParams.WRAP_CONTENT, context.dp(TabletLayout.barHeightDp(context)))
+     }
+ 
+     private val directExecutor by lazy {
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/IdleUi.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/IdleUi.kt
+index 14c09e6..a14ca85 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/IdleUi.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/IdleUi.kt
+@@ -18,7 +18,7 @@ import android.widget.ViewAnimator
+ import org.fcitx.fcitx5.android.R
+ import org.fcitx.fcitx5.android.data.prefs.AppPrefs
+ import org.fcitx.fcitx5.android.data.theme.Theme
+-import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
++import org.fcitx.fcitx5.android.input.TabletLayout
+ import org.fcitx.fcitx5.android.input.bar.ui.idle.ButtonsBarUi
+ import org.fcitx.fcitx5.android.input.bar.ui.idle.ClipboardSuggestionUi
+ import org.fcitx.fcitx5.android.input.bar.ui.idle.InlineSuggestionsUi
+@@ -114,7 +114,7 @@ class IdleUi(
+     }
+ 
+     private val idleBody = constraintLayout {
+-        val size = dp(KawaiiBarComponent.HEIGHT)
++        val size = dp(TabletLayout.barHeightDp(ctx))
+         add(menuButton, lParams(size, size) {
+             startOfParent()
+             centerVertically()
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/idle/NumberRow.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/idle/NumberRow.kt
+index 85500d7..14e429d 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/idle/NumberRow.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/bar/ui/idle/NumberRow.kt
+@@ -9,7 +9,7 @@ import android.content.Context
+ import org.fcitx.fcitx5.android.core.KeySym
+ import org.fcitx.fcitx5.android.data.theme.Theme
+ import android.view.MotionEvent
+-import org.fcitx.fcitx5.android.input.bar.KawaiiBarComponent
++import org.fcitx.fcitx5.android.input.TabletLayout
+ import org.fcitx.fcitx5.android.input.keyboard.BaseKeyboard
+ import org.fcitx.fcitx5.android.input.keyboard.KeyAction
+ import org.fcitx.fcitx5.android.input.keyboard.KeyDef
+@@ -32,7 +32,7 @@ class NumberRow(ctx: Context, theme: Theme) : BaseKeyboard(ctx, theme, Layout) {
+             val dir = if (context.resources.configuration.layoutDirection == LAYOUT_DIRECTION_LTR) 1 else -1
+             val sx = startEvent.x * dir
+             val cx = ev.getX(ev.actionIndex) * dir
+-            val shouldCollapse = cx > sx && abs(cx - sx) > dp(KawaiiBarComponent.HEIGHT)
++            val shouldCollapse = cx > sx && abs(cx - sx) > dp(TabletLayout.barHeightDp(context))
+             if (shouldCollapse) {
+                 Timber.d("NumberRow: intercepted gesture from child keyboard to handle swipe")
+                 resetState()
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+index 8edfa5e..cf08081 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+@@ -29,6 +29,7 @@ import org.fcitx.fcitx5.android.data.theme.Theme
+ import org.fcitx.fcitx5.android.data.theme.ThemeManager
+ import org.fcitx.fcitx5.android.data.theme.ThemePrefs.PunctuationPosition
+ import org.fcitx.fcitx5.android.input.AutoScaleTextView
++import org.fcitx.fcitx5.android.input.TabletLayout
+ import org.fcitx.fcitx5.android.input.keyboard.KeyDef.Appearance.Border
+ import org.fcitx.fcitx5.android.input.keyboard.KeyDef.Appearance.Variant
+ import org.fcitx.fcitx5.android.utils.styledFloat
+@@ -262,7 +263,7 @@ open class TextKeyView(ctx: Context, theme: Theme, def: KeyDef.Appearance.Text)
+         isFocusable = false
+         background = null
+         text = def.displayText
+-        setTextSize(TypedValue.COMPLEX_UNIT_DIP, def.textSize)
++        setTextSize(TypedValue.COMPLEX_UNIT_DIP, def.textSize * TabletLayout.scale(ctx))
+         textDirection = View.TEXT_DIRECTION_FIRST_STRONG_LTR
+         // keep original typeface, apply textStyle only
+         setTypeface(typeface, def.textStyle)
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/popup/PopupComponent.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/popup/PopupComponent.kt
+index daa13c4..eadf072 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/popup/PopupComponent.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/popup/PopupComponent.kt
+@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import org.fcitx.fcitx5.android.data.theme.ThemeManager
++import org.fcitx.fcitx5.android.input.TabletLayout
+ import org.fcitx.fcitx5.android.input.broadcast.PunctuationComponent
+ import org.fcitx.fcitx5.android.input.dependency.context
+ import org.fcitx.fcitx5.android.input.dependency.inputMethodService
+@@ -48,13 +49,13 @@ class PopupComponent :
+         context.dp(ThemeManager.prefs.keyVerticalMargin.getValue())
+     }
+     private val popupWidth by lazy {
+-        context.dp(38)
++        (context.dp(38f) * TabletLayout.scale(context)).toInt()
+     }
+     private val popupHeight by lazy {
+-        context.dp(116)
++        (context.dp(116f) * TabletLayout.scale(context)).toInt()
+     }
+     private val popupKeyHeight by lazy {
+-        context.dp(48)
++        (context.dp(48f) * TabletLayout.scale(context)).toInt()
+     }
+     private val popupRadius by lazy {
+         context.dp(ThemeManager.prefs.keyRadius.getValue()).toFloat()
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 68aa6eb..80d5b66 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -105,6 +105,11 @@
+     <string name="theme">主题</string>
+     <string name="key_ripple_effect">启用按键水波纹特效</string>
+     <string name="key_border">启用按键边框</string>
++    <string name="tablet_mode">平板布局</string>
++    <string name="tablet_mode_auto">自动(屏幕宽度 600dp 以上)</string>
++    <string name="tablet_mode_on">始终启用</string>
++    <string name="tablet_mode_off">不启用</string>
++    <string name="tablet_max_width">平板键盘最大宽度</string>
+     <string name="glass_blur">实时玻璃模糊</string>
+     <string name="glass_blur_summary">模糊键盘后方的内容(需要 Android 12+)。搭配半透明主题并开启按键边框效果最佳;系统关闭模糊时会自动回退为主题背景。</string>
+     <string name="glass_blur_radius">玻璃模糊半径</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index a391ce9..35cd895 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -105,6 +105,11 @@
+     <string name="theme">Theme</string>
+     <string name="key_ripple_effect">Enable key ripple effect</string>
+     <string name="key_border">Enable key border</string>
++    <string name="tablet_mode">Tablet layout</string>
++    <string name="tablet_mode_auto">Automatic (screens 600dp and wider)</string>
++    <string name="tablet_mode_on">Always</string>
++    <string name="tablet_mode_off">Never</string>
++    <string name="tablet_max_width">Tablet keyboard max width</string>
+     <string name="glass_blur">Real-time glass blur</string>
+     <string name="glass_blur_summary">Blur the content behind the keyboard (Android 12+). Works best with a translucent theme and key border enabled. Falls back to the theme background when the system disables blur.</string>
+     <string name="glass_blur_radius">Glass blur radius</string>
+-- 
+2.43.0
+
