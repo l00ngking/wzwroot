@@ -1,0 +1,313 @@
+From 039d841f2930198b148e585fcbf0c4987cb1ab39 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 16:14:11 +0000
+Subject: [PATCH 3/3] Add glass key style
+
+A custom drawable for keys: translucent body, sheen, specular rim and soft
+shadow, enabled by a new "Glass key style" switch (needs key border). Also
+lowers the default glass blur radius to 16dp.
+---
+ .../fcitx5/android/data/theme/ThemePrefs.kt   |   8 +-
+ .../input/keyboard/GlassKeyDrawable.kt        | 177 ++++++++++++++++++
+ .../android/input/keyboard/KeyDrawable.kt     |  14 ++
+ .../fcitx5/android/input/keyboard/KeyView.kt  |   9 +-
+ app/src/main/res/values-zh-rCN/strings.xml    |   2 +
+ app/src/main/res/values/strings.xml           |   2 +
+ 6 files changed, 209 insertions(+), 3 deletions(-)
+ create mode 100644 app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
+
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+index f8e13ed..5816179 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+@@ -49,8 +49,14 @@ class ThemePrefs(sharedPreferences: SharedPreferences) :
+         enableUiOn = { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S }
+     )
+ 
++    val glassKeys = switch(
++        R.string.glass_keys, "glass_keys", false,
++        summary = R.string.glass_keys_summary,
++        enableUiOn = { keyBorder.getValue() }
++    )
++
+     val glassBlurRadius = int(
+-        R.string.glass_blur_radius, "glass_blur_radius", 24, 4, 80, "dp",
++        R.string.glass_blur_radius, "glass_blur_radius", 16, 4, 80, "dp",
+         enableUiOn = { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur.getValue() }
+     )
+ 
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
+new file mode 100644
+index 0000000..64cee62
+--- /dev/null
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
+@@ -0,0 +1,177 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2025 Fcitx5 for Android Contributors
++ */
++
++package org.fcitx.fcitx5.android.input.keyboard
++
++import android.graphics.Canvas
++import android.graphics.Color
++import android.graphics.ColorFilter
++import android.graphics.LinearGradient
++import android.graphics.Paint
++import android.graphics.PixelFormat
++import android.graphics.Rect
++import android.graphics.RectF
++import android.graphics.Shader
++import android.graphics.drawable.Drawable
++import androidx.annotation.ColorInt
++import androidx.core.graphics.ColorUtils
++import kotlin.math.max
++import kotlin.math.min
++
++/**
++ * A key that looks like a piece of glass lit from the top left:
++ *
++ * 1. a soft shadow below it,
++ * 2. a translucent body that is slightly more opaque at the top,
++ * 3. a white sheen over its upper half,
++ * 4. a thin outline (light themes only, so that white glass is still visible on white),
++ * 5. a specular rim that is bright at the top-left and bottom-right corners and dim in between.
++ *
++ * The numbers are mirrored by `GLASS` in tools/render_blur_demo.py, which is what the preview
++ * images are drawn with. Keep them in sync.
++ *
++ * @param color the key color, its alpha is ignored (the body alpha is derived from [dark])
++ * @param opaque for accent keys: a mostly opaque body instead of the translucent one
++ */
++class GlassKeyDrawable(
++    @ColorInt private val color: Int,
++    private val radius: Float,
++    private val dark: Boolean,
++    private val density: Float,
++    private val opaque: Boolean = false
++) : Drawable() {
++
++    private val bodyTop = if (opaque) 0.88f else if (dark) 0.26f else 0.46f
++    private val bodyBottom = if (opaque) 0.80f else if (dark) 0.07f else 0.18f
++    private val sheenAlpha = if (dark) 0.20f else 0.34f
++    private val hairlineAlpha = if (dark) 0f else 0.10f
++    private val shadowAlpha = if (dark) 0.30f else 0.10f
++    private val rimAlphas = if (dark) {
++        floatArrayOf(0.80f, 0.07f, 0.07f, 0.42f)
++    } else {
++        floatArrayOf(0.95f, 0.10f, 0.10f, 0.60f)
++    }
++    private val rimWidth = RIM_WIDTH_DP * density
++
++    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
++    private val rect = RectF()
++    private val tmp = RectF()
++
++    private var bodyShader: Shader? = null
++    private var sheenShader: Shader? = null
++    private var rimShader: Shader? = null
++
++    private var drawAlpha = 255
++
++    private fun setPaintColor(@ColorInt c: Int) {
++        paint.shader = null
++        paint.color = c
++        paint.alpha = Color.alpha(c) * drawAlpha / 255
++    }
++
++    private fun setPaintShader(shader: Shader?) {
++        paint.shader = shader
++        paint.alpha = drawAlpha
++    }
++
++    private fun withAlpha(@ColorInt c: Int, a: Float) =
++        ColorUtils.setAlphaComponent(c, (a.coerceIn(0f, 1f) * 255f + 0.5f).toInt())
++
++    override fun onBoundsChange(bounds: Rect) {
++        // the shadow is drawn outside of the bounds, into the key margins
++        rect.set(bounds)
++        if (rect.width() <= 0f || rect.height() <= 0f) return
++
++        val rgb = color and 0x00FFFFFF
++        bodyShader = LinearGradient(
++            0f, rect.top, 0f, rect.bottom,
++            withAlpha(rgb or Color.BLACK, bodyTop), withAlpha(rgb or Color.BLACK, bodyBottom),
++            Shader.TileMode.CLAMP
++        )
++        sheenShader = LinearGradient(
++            0f, rect.top, 0f, rect.top + rect.height() * 0.5f,
++            withAlpha(Color.WHITE, sheenAlpha), withAlpha(Color.WHITE, 0f),
++            Shader.TileMode.CLAMP
++        )
++        rimShader = LinearGradient(
++            rect.left, rect.top, rect.right, rect.bottom,
++            IntArray(4) { withAlpha(Color.WHITE, rimAlphas[it]) },
++            RIM_POSITIONS, Shader.TileMode.CLAMP
++        )
++    }
++
++    override fun draw(canvas: Canvas) {
++        if (rect.isEmpty) return
++        val r = min(radius, min(rect.width(), rect.height()) / 2f)
++
++        // 1. shadow
++        paint.style = Paint.Style.FILL
++        for (i in 1..SHADOW_LAYERS) {
++            val grow = i * SHADOW_GROW_DP * density
++            tmp.set(rect)
++            tmp.inset(-grow, -grow)
++            tmp.offset(0f, SHADOW_OFFSET_DP * density)
++            setPaintColor(withAlpha(Color.BLACK, shadowAlpha * (1f - i / (SHADOW_LAYERS + 1f)) * 0.55f))
++            canvas.drawRoundRect(tmp, r + grow, r + grow, paint)
++        }
++
++        // 2. body
++        setPaintShader(bodyShader)
++        canvas.drawRoundRect(rect, r, r, paint)
++
++        // 3. sheen, kept inside the rim
++        val inset = SHEEN_INSET_DP * density
++        tmp.set(rect)
++        tmp.inset(inset, inset)
++        setPaintShader(sheenShader)
++        canvas.drawRoundRect(tmp, max(r - inset, 0f), max(r - inset, 0f), paint)
++
++        // 4. hairline just outside
++        if (hairlineAlpha > 0f) {
++            paint.style = Paint.Style.STROKE
++            paint.strokeWidth = (density * 0.4f).coerceAtLeast(1f)
++            setPaintColor(withAlpha(HAIRLINE_COLOR, hairlineAlpha))
++            tmp.set(rect)
++            tmp.inset(-paint.strokeWidth / 2f, -paint.strokeWidth / 2f)
++            canvas.drawRoundRect(tmp, r + paint.strokeWidth / 2f, r + paint.strokeWidth / 2f, paint)
++        }
++
++        // 5. specular rim, a stroke centered on the inside edge of the body
++        setPaintShader(rimShader)
++        paint.style = Paint.Style.STROKE
++        paint.strokeWidth = rimWidth
++        tmp.set(rect)
++        tmp.inset(rimWidth / 2f, rimWidth / 2f)
++        val rimRadius = max(r - rimWidth / 2f, 0f)
++        canvas.drawRoundRect(tmp, rimRadius, rimRadius, paint)
++        paint.style = Paint.Style.FILL
++        paint.shader = null
++    }
++
++    override fun getAlpha(): Int = drawAlpha
++
++    override fun setAlpha(alpha: Int) {
++        drawAlpha = alpha
++        invalidateSelf()
++    }
++
++    override fun setColorFilter(colorFilter: ColorFilter?) {
++        paint.colorFilter = colorFilter
++        invalidateSelf()
++    }
++
++    @Deprecated("Deprecated in Java", ReplaceWith("PixelFormat.TRANSLUCENT"))
++    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
++
++    companion object {
++        private const val RIM_WIDTH_DP = 0.9f
++        private const val SHEEN_INSET_DP = 0.6f
++        private const val SHADOW_OFFSET_DP = 1.0f
++        private const val SHADOW_GROW_DP = 0.42f
++        private const val SHADOW_LAYERS = 5
++        private val HAIRLINE_COLOR = Color.rgb(40, 50, 80)
++        private val RIM_POSITIONS = floatArrayOf(0f, 0.3f, 0.7f, 1f)
++    }
++}
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
+index 7bb9476..6238195 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
+@@ -78,3 +78,17 @@ fun borderedKeyBackgroundDrawable(
+ ).apply {
+     setLayerInset(0, hMargin, vMargin, hMargin, vMargin)
+ }
++
++
++fun glassKeyBackgroundDrawable(
++    @ColorInt bkgColor: Int,
++    dark: Boolean,
++    radius: Float,
++    density: Float,
++    accent: Boolean,
++    hMargin: Int,
++    vMargin: Int
++): Drawable = InsetDrawable(
++    GlassKeyDrawable(bkgColor, radius, dark, density, accent),
++    hMargin, vMargin, hMargin, vMargin
++)
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+index 9bfc478..52a4509 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+@@ -56,6 +56,7 @@ abstract class KeyView(ctx: Context, val theme: Theme, val def: KeyDef.Appearanc
+ 
+     val bordered: Boolean
+     val borderStroke: Boolean
++    val glass: Boolean
+     val rippled: Boolean
+     val radius: Float
+     val hMargin: Int
+@@ -65,6 +66,7 @@ abstract class KeyView(ctx: Context, val theme: Theme, val def: KeyDef.Appearanc
+         val prefs = ThemeManager.prefs
+         bordered = prefs.keyBorder.getValue()
+         borderStroke = prefs.keyBorderStroke.getValue()
++        glass = bordered && prefs.glassKeys.getValue()
+         rippled = prefs.keyRippleEffect.getValue()
+         radius = dp(prefs.keyRadius.getValue().toFloat())
+         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+@@ -126,7 +128,10 @@ abstract class KeyView(ctx: Context, val theme: Theme, val def: KeyDef.Appearanc
+             }
+             val borderOrShadowWidth = dp(1)
+             // background: key border
+-            appearanceView.background = if (borderStroke) borderedKeyBackgroundDrawable(
++            appearanceView.background = if (glass) glassKeyBackgroundDrawable(
++                bkgColor, theme.isDark, radius, resources.displayMetrics.density,
++                def.variant == Variant.Accent, hMargin, vMargin
++            ) else if (borderStroke) borderedKeyBackgroundDrawable(
+                 bkgColor, theme.keyShadowColor,
+                 radius, borderOrShadowWidth, hMargin, vMargin
+             ) else shadowedKeyBackgroundDrawable(
+@@ -152,7 +157,7 @@ abstract class KeyView(ctx: Context, val theme: Theme, val def: KeyDef.Appearanc
+                 // ripple should be masked with an opaque color
+                 mask ?: highlightMaskDrawable(Color.WHITE)
+             )
+-        } else if (bordered && borderStroke) {
++        } else if (bordered && borderStroke && !glass) {
+             StateListDrawable().apply {
+                 addState(
+                     intArrayOf(android.R.attr.state_pressed),
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 7c36548..5d46ced 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -108,6 +108,8 @@
+     <string name="glass_blur">实时玻璃模糊</string>
+     <string name="glass_blur_summary">模糊键盘后方的内容(需要 Android 12+)。搭配半透明主题并开启按键边框效果最佳;系统关闭模糊时会自动回退为主题背景。</string>
+     <string name="glass_blur_radius">玻璃模糊半径</string>
++    <string name="glass_keys">玻璃按键样式</string>
++    <string name="glass_keys_summary">半透明胶囊按键,带镜面高光描边和柔和投影。需要启用按键边框;按键圆角 16–20 dp、搭配半透明主题效果最佳。</string>
+     <string name="brightness">亮度</string>
+     <string name="key_radius">按键圆角半径</string>
+     <string name="text_editing_button_radius">文本编辑按钮圆角半径</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 04dfe8b..e0bc2ba 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -108,6 +108,8 @@
+     <string name="glass_blur">Real-time glass blur</string>
+     <string name="glass_blur_summary">Blur the content behind the keyboard (Android 12+). Works best with a translucent theme and key border enabled. Falls back to the theme background when the system disables blur.</string>
+     <string name="glass_blur_radius">Glass blur radius</string>
++    <string name="glass_keys">Glass key style</string>
++    <string name="glass_keys_summary">Translucent capsule keys with a specular rim and soft shadow. Requires key border; a key radius of 16–20 dp and a translucent theme look best.</string>
+     <string name="brightness">Brightness</string>
+     <string name="key_radius">Key radius</string>
+     <string name="text_editing_button_radius">Text editing button radius</string>
+-- 
+2.43.0
+

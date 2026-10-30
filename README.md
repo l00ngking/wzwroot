@@ -51,23 +51,26 @@ Fcitx5 for Android 的自定义主题只支持「一张背景图 + 各部件颜�
 
 ## 源码补丁:实时模糊 + 剪贴板硬件加密
 
-`patches/` 里是针对上游 fcitx5-android(固定在 `eb5b502`)的两个补丁,需要自己编译安装包:
+`patches/` 里是针对上游 fcitx5-android(固定在 `eb5b502`)的三个补丁,需要自己编译安装包:
 
 ```bash
 tools/apply_patches.sh            # 克隆上游、检出固定提交、应用补丁
 cd fcitx5-android && ./gradlew assembleRelease
 ```
 
-> ⚠️ **这两个补丁还没有在真机上跑过,也没有完整编译过**(开发环境里装不了 Android SDK)。已做的验证:补丁能干净地应用到上游固定提交;`GlassBackdrop` 和 `ClipboardCrypto` 用 Android 14 框架 jar 做过类型检查;加解密/哈希的往返、篡改检测在 JVM 上测过。Keystore、Room 迁移、窗口模糊都只能在真机上验证,首次编译还会生成 `app/schemas/.../ClipboardDatabase/5.json`,请一并提交。
+> ⚠️ **这两个补丁还没有在真机上跑过,也没有完整编译过**(开发环境里装不了 Android SDK)。已做的验证:补丁能干净地应用到上游固定提交;`GlassBackdrop`、`GlassKeyDrawable`、`ClipboardCrypto` 用 Android 14 框架 jar 做过类型检查;加解密/哈希的往返、篡改检测在 JVM 上测过。Keystore、Room 迁移、窗口模糊都只能在真机上验证,首次编译还会生成 `app/schemas/.../ClipboardDatabase/5.json`,请一并提交。
 
-### 0001 · 实时玻璃模糊
+### 效果图(模拟渲染)
 
 | 浅色 | 深色 |
 | --- | --- |
-| ![blur light](preview/demo_blur_LiquidGlassLight.png) | ![blur dark](preview/demo_blur_LiquidGlassDark.png) |
+| ![light](preview/demo_blur_LiquidGlassLight.png) | ![dark](preview/demo_blur_LiquidGlassDark.png) |
 
-> 这是**模拟渲染**(`tools/render_blur_demo.py`:对模拟应用界面做高斯模糊,再叠上补丁里同样的着色),不是真机截图。左边是主题自带的静态背景,右边是实时模糊。
+> 这是**模拟渲染**(`tools/render_blur_demo.py`),不是真机截图:对一个模拟的聊天界面做高斯模糊,再用与 `GlassKeyDrawable` 相同的参数画按键。左边是只靠主题能做到的样子,右边是打上 0001 + 0003 补丁并开启两个开关后的样子。真机上模糊的强度和细节会有差异。
 
+![closeup](preview/demo_glass_LiquidGlassLight_closeup.png)
+
+### 0001 · 实时玻璃模糊
 
 主题设置里新增「实时玻璃模糊」开关和「玻璃模糊半径」(Android 12+,默认关)。
 
@@ -75,6 +78,20 @@ cd fcitx5-android && ./gradlew assembleRelease
 - 系统关闭跨窗口模糊(省电模式、厂商限制、低端设备)时自动回退到主题自带的静态毛玻璃背景。
 - 建议同时开启「按键边框」,并使用本仓库的 LiquidGlass 主题(半透明按键)。
 - 模糊的是键盘后面的内容。大多数应用在键盘弹出时会把内容整体顶上去,键盘后面就只剩窗口底色,这时效果不明显;内容绘制到键盘后面的应用(边到边布局、`adjustNothing` 等)效果最好。
+
+### 0003 · 玻璃按键
+
+主题设置里新增「玻璃按键样式」开关(需要先启用「按键边框」)。按键改为自绘,从下到上依次是:
+
+1. 按键下方的柔和投影;
+2. 半透明的玻璃体,上沿比下沿略不透明;
+3. 上半部分的白色高光;
+4. 浅色主题下一圈很淡的深色细线(否则白色玻璃在白底上看不见);
+5. 镜面高光描边:左上角和右下角亮、中间暗,这是液态玻璃最有辨识度的特征。
+
+推荐设置:按键边框开、按键圆角 **18 dp**(接近胶囊形)、按键水波纹关、水平间距 3 dp、垂直间距 7 dp,配合本仓库的 LiquidGlass 主题。回车键用主题的强调色,做成不透明度较高的蓝色玻璃。
+
+限制:折射(玻璃边缘把背景「拉伸」变形)做不了。Android 没有提供对窗口后方内容做自定义着色的接口,只能模糊,所以这里的「液态感」来自高光、投影和通透度,而不是真正的折射。
 
 ### 0002 · 剪贴板加密
 
@@ -92,8 +109,8 @@ cd fcitx5-android && ./gradlew assembleRelease
 ```
 tools/build_theme.py   主题生成脚本(配色、背景、打包、预览图)
 tools/apply_patches.sh 克隆上游并应用源码补丁
-tools/render_blur_demo.py 实时模糊的模拟效果图
-patches/*.patch        实时模糊、剪贴板加密两个源码补丁
+tools/render_blur_demo.py 效果图(模拟渲染)
+patches/*.patch        实时模糊、剪贴板加密、玻璃按键三个源码补丁
 dist/*.zip             可直接导入的主题包
 preview/*.png          预览图
 ```
