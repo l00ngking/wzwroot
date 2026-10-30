@@ -51,14 +51,14 @@ Fcitx5 for Android 的自定义主题只支持「一张背景图 + 各部件颜�
 
 ## 源码补丁:实时模糊 + 剪贴板硬件加密
 
-`patches/` 里是针对上游 fcitx5-android(固定在 `eb5b502`)的三个补丁,需要自己编译安装包:
+`patches/` 里是针对上游 fcitx5-android(固定在 `eb5b502`)的四个补丁,需要自己编译安装包:
 
 ```bash
 tools/apply_patches.sh            # 克隆上游、检出固定提交、应用补丁
 cd fcitx5-android && ./gradlew assembleRelease
 ```
 
-> ⚠️ **这两个补丁还没有在真机上跑过,也没有完整编译过**(开发环境里装不了 Android SDK)。已做的验证:补丁能干净地应用到上游固定提交;`GlassBackdrop`、`GlassKeyDrawable`、`ClipboardCrypto` 用 Android 14 框架 jar 做过类型检查;加解密/哈希的往返、篡改检测在 JVM 上测过。Keystore、Room 迁移、窗口模糊都只能在真机上验证,首次编译还会生成 `app/schemas/.../ClipboardDatabase/5.json`,请一并提交。
+> ⚠️ **这些补丁还没有在真机上跑过,也没有完整编译过**(开发环境里装不了 Android SDK)。已做的验证:补丁能干净地应用到上游固定提交;`GlassBackdrop`、`GlassKeyDrawable`、`GlassRefraction`、`ClipboardCrypto` 用 Android 14 框架 jar 做过类型检查;加解密/哈希的往返、篡改检测在 JVM 上测过。Keystore、Room 迁移、窗口模糊、AGSL 着色器都只能在真机上验证,首次编译还会生成 `app/schemas/.../ClipboardDatabase/5.json`,请一并提交。
 
 ### 效果图(模拟渲染)
 
@@ -91,7 +91,27 @@ cd fcitx5-android && ./gradlew assembleRelease
 
 推荐设置:按键边框开、按键圆角 **18 dp**(接近胶囊形)、按键水波纹关、水平间距 3 dp、垂直间距 7 dp,配合本仓库的 LiquidGlass 主题。回车键用主题的强调色,做成不透明度较高的蓝色玻璃。
 
-限制:折射(玻璃边缘把背景「拉伸」变形)做不了。Android 没有提供对窗口后方内容做自定义着色的接口,只能模糊,所以这里的「液态感」来自高光、投影和通透度,而不是真正的折射。
+限制:键盘**后面**其他应用的内容没法折射(Android 不允许读取别的窗口的画面,只能模糊)。折射键盘自己的背景图见下面的 0004。
+
+### 0004 · 玻璃折射
+
+![refraction](preview/demo_refraction_LiquidGlassLight_closeup.png)
+
+> 上:0003 玻璃按键;下:再开启 0004 折射。模拟渲染,用 numpy 逐像素复刻了着色器公式。
+
+主题设置里新增「玻璃折射」开关(Android 13+,需要先开「玻璃按键样式」)。每个按键用一个 AGSL 着色器对**键盘自带的背景图**做折射:
+
+- 按键中间基本是平的,略微放大(×1/0.97);
+- 距边缘 14 dp 的范围内,取样点被一路向外推,越靠边推得越多(三次方衰减),背景就像在按键边缘「翻过去」一样弯折;
+- 红、绿、蓝三个通道推的量差 6%(色散),边缘出现彩色镶边;
+- 最边缘略微变暗,看起来有厚度。
+
+要点:
+
+- **折射的是键盘自己的背景图,不是屏幕上的实时内容**,所以它和「实时玻璃模糊」互斥,开启折射后模糊不生效。
+- 折射需要背景有清晰的形状边缘,否则透镜没东西可弯。模糊得很厉害的背景(比如 LiquidGlass 主题自带的)几乎看不出效果。请导入 **`LiquidGlassCrystalLight.zip` / `LiquidGlassCrystalDark.zip`**,它们是同样配色加一张带清晰色块和线条的背景;也可以把自己的壁纸做成不糊的背景图。
+- 着色器编译失败时(`RuntimeShader` 构造抛异常)自动退回 0003 的玻璃按键,不会崩溃。
+- 背景图在键盘视图大小变化时重新渲染成位图,所有按键共用。
 
 ### 0002 · 剪贴板加密
 
@@ -110,7 +130,7 @@ cd fcitx5-android && ./gradlew assembleRelease
 tools/build_theme.py   主题生成脚本(配色、背景、打包、预览图)
 tools/apply_patches.sh 克隆上游并应用源码补丁
 tools/render_blur_demo.py 效果图(模拟渲染)
-patches/*.patch        实时模糊、剪贴板加密、玻璃按键三个源码补丁
+patches/*.patch        实时模糊、剪贴板加密、玻璃按键、玻璃折射四个源码补丁
 dist/*.zip             可直接导入的主题包
 preview/*.png          预览图
 ```

@@ -1,0 +1,476 @@
+From 95ebeea968b92e7dc6b33c008b4aacf285aeda93 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 16:45:17 +0000
+Subject: [PATCH 4/4] Add glass refraction for keys
+
+Keys sample the keyboard's own background image through an AGSL lens shader
+(Android 13+): almost flat inside, bending over the edge, with dispersion and a
+slightly darker rim. Switch "Glass refraction", needs glass key style, and is
+exclusive with the real-time blur since it refracts the keyboard background
+rather than the content behind the window.
+---
+ .../fcitx5/android/data/theme/ThemePrefs.kt   |   9 +
+ .../fcitx/fcitx5/android/input/InputView.kt   |  20 +-
+ .../input/keyboard/GlassKeyDrawable.kt        |  19 +-
+ .../android/input/keyboard/GlassRefraction.kt | 236 ++++++++++++++++++
+ .../android/input/keyboard/KeyDrawable.kt     |  17 +-
+ .../fcitx5/android/input/keyboard/KeyView.kt  |   3 +-
+ app/src/main/res/values-zh-rCN/strings.xml    |   2 +
+ app/src/main/res/values/strings.xml           |   2 +
+ 8 files changed, 300 insertions(+), 8 deletions(-)
+ create mode 100644 app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
+
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+index 5816179..2c04f1f 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+@@ -55,6 +55,15 @@ class ThemePrefs(sharedPreferences: SharedPreferences) :
+         enableUiOn = { keyBorder.getValue() }
+     )
+ 
++    val glassRefraction = switch(
++        R.string.glass_refraction, "glass_refraction", false,
++        summary = R.string.glass_refraction_summary,
++        enableUiOn = {
++            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
++                    keyBorder.getValue() && glassKeys.getValue()
++        }
++    )
++
+     val glassBlurRadius = int(
+         R.string.glass_blur_radius, "glass_blur_radius", 16, 4, 80, "dp",
+         enableUiOn = { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur.getValue() }
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+index f861bd5..ef21d86 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+@@ -32,6 +32,8 @@ import org.fcitx.fcitx5.android.input.broadcast.PunctuationComponent
+ import org.fcitx.fcitx5.android.input.broadcast.ReturnKeyDrawableComponent
+ import org.fcitx.fcitx5.android.input.candidates.horizontal.HorizontalCandidateComponent
+ import org.fcitx.fcitx5.android.input.keyboard.CommonKeyActionListener
++import org.fcitx.fcitx5.android.input.keyboard.GlassRefraction
++import org.fcitx.fcitx5.android.input.keyboard.RefractionSource
+ import org.fcitx.fcitx5.android.input.keyboard.KeyboardHeightPercentBase.DisplayMetrics
+ import org.fcitx.fcitx5.android.input.keyboard.KeyboardHeightPercentBase.RealSize
+ import org.fcitx.fcitx5.android.input.keyboard.KeyboardWindow
+@@ -88,6 +90,15 @@ class InputView(
+ 
+     private var glassBackdrop: GlassBackdrop? = null
+ 
++    private val glassKeys by ThemeManager.prefs.glassKeys
++    private val glassRefraction by ThemeManager.prefs.glassRefraction
++
++    // keys refract the keyboard's own background, which excludes the real-time blur behind it
++    private val refractionSource: RefractionSource? =
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
++            keyBorder && glassKeys && glassRefraction
++        ) RefractionSource(staticBackground) else null
++
+     private val placeholderOnClickListener = OnClickListener { }
+ 
+     // use clickable view as padding, so MotionEvent can be split to padding view and keyboard view
+@@ -215,6 +226,9 @@ class InputView(
+         // MUST call before any operation
+         setupScope()
+ 
++        // KeyViews pick it up while they are created below
++        GlassRefraction.source = refractionSource
++
+         // restore punctuation mapping in case of InputView recreation
+         fcitx.launchOnReady {
+             punctuation.updatePunctuationMapping(it.statusAreaActionsCached)
+@@ -271,7 +285,9 @@ class InputView(
+ 
+         updateKeyboardSize()
+ 
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur) {
++        refractionSource?.attach(keyboardView)
++
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur && refractionSource == null) {
+             glassBackdrop = GlassBackdrop(this, keyboardView, theme, dp(glassBlurRadius)) { active ->
+                 // when the real backdrop is on, the window behind the keyboard provides the
+                 // (blurred) background, so the static one must be removed to let it show through
+@@ -405,6 +421,8 @@ class InputView(
+ 
+     override fun onDetachedFromWindow() {
+         glassBackdrop?.stop()
++        refractionSource?.detach()
++        if (GlassRefraction.source === refractionSource) GlassRefraction.source = null
+         advancedPrefs.unregisterOnChangeListener(onKeyboardSizeChangeListener)
+         keyboardPrefs.unregisterOnChangeListener(onKeyboardSizeChangeListener)
+         // clear DynamicScope, implies that InputView should not be attached again after detached.
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
+index 64cee62..a3d4562 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassKeyDrawable.kt
+@@ -43,6 +43,12 @@ class GlassKeyDrawable(
+     private val opaque: Boolean = false
+ ) : Drawable() {
+ 
++    /**
++     * Draws an opaque body (refracting the keyboard background) in place of the translucent one.
++     * Set it before the drawable is first drawn.
++     */
++    var bodyPainter: GlassBodyPainter? = null
++
+     private val bodyTop = if (opaque) 0.88f else if (dark) 0.26f else 0.46f
+     private val bodyBottom = if (opaque) 0.80f else if (dark) 0.07f else 0.18f
+     private val sheenAlpha = if (dark) 0.20f else 0.34f
+@@ -60,6 +66,8 @@ class GlassKeyDrawable(
+     private val tmp = RectF()
+ 
+     private var bodyShader: Shader? = null
++    // a lighter body, laid over the refracted one so that it is not just a copy of the background
++    private var tintShader: Shader? = null
+     private var sheenShader: Shader? = null
+     private var rimShader: Shader? = null
+ 
+@@ -90,6 +98,12 @@ class GlassKeyDrawable(
+             withAlpha(rgb or Color.BLACK, bodyTop), withAlpha(rgb or Color.BLACK, bodyBottom),
+             Shader.TileMode.CLAMP
+         )
++        tintShader = LinearGradient(
++            0f, rect.top, 0f, rect.bottom,
++            withAlpha(rgb or Color.BLACK, bodyTop * REFRACTED_TINT_SCALE),
++            withAlpha(rgb or Color.BLACK, bodyBottom * REFRACTED_TINT_SCALE),
++            Shader.TileMode.CLAMP
++        )
+         sheenShader = LinearGradient(
+             0f, rect.top, 0f, rect.top + rect.height() * 0.5f,
+             withAlpha(Color.WHITE, sheenAlpha), withAlpha(Color.WHITE, 0f),
+@@ -118,7 +132,9 @@ class GlassKeyDrawable(
+         }
+ 
+         // 2. body
+-        setPaintShader(bodyShader)
++        setPaintShader(null)
++        val refracted = bodyPainter?.drawBody(canvas, rect, r, paint) ?: false
++        setPaintShader(if (refracted) tintShader else bodyShader)
+         canvas.drawRoundRect(rect, r, r, paint)
+ 
+         // 3. sheen, kept inside the rim
+@@ -166,6 +182,7 @@ class GlassKeyDrawable(
+     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+ 
+     companion object {
++        private const val REFRACTED_TINT_SCALE = 0.5f
+         private const val RIM_WIDTH_DP = 0.9f
+         private const val SHEEN_INSET_DP = 0.6f
+         private const val SHADOW_OFFSET_DP = 1.0f
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
+new file mode 100644
+index 0000000..5cc262d
+--- /dev/null
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
+@@ -0,0 +1,236 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2025 Fcitx5 for Android Contributors
++ */
++
++package org.fcitx.fcitx5.android.input.keyboard
++
++import android.graphics.Bitmap
++import android.graphics.BitmapShader
++import android.graphics.Canvas
++import android.graphics.Paint
++import android.graphics.PointF
++import android.graphics.Rect
++import android.graphics.RectF
++import android.graphics.RuntimeShader
++import android.graphics.Shader
++import android.graphics.drawable.Drawable
++import android.os.Build
++import android.view.View
++import androidx.annotation.RequiresApi
++import timber.log.Timber
++import java.util.Collections
++import java.util.WeakHashMap
++import kotlin.math.max
++
++/**
++ * Keys cannot refract what is behind the keyboard window (other apps' content is not readable),
++ * but they can refract the keyboard's own background image. [RefractionSource] renders that image
++ * into a bitmap the size of the keyboard, and [RefractionPainter] lets every key sample it through
++ * a lens shader.
++ *
++ * KeyViews are created while InputView is being constructed, long before any layout, hence the
++ * process wide handle. InputView sets it before creating the keyboard and clears it on detach.
++ */
++object GlassRefraction {
++    @Volatile
++    var source: RefractionSource? = null
++}
++
++class RefractionSource(private val background: Drawable) {
++
++    var bitmap: Bitmap? = null
++        private set
++
++    private var anchor: View? = null
++    private val anchorLocation = IntArray(2)
++    private val hostLocation = IntArray(2)
++    private val dependants = Collections.newSetFromMap(WeakHashMap<Drawable, Boolean>())
++
++    private val layoutListener = View.OnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
++        if (r - l != orr - ol || b - t != ob - ot) rebuild(r - l, b - t)
++    }
++
++    /**
++     * @param view the view the background image fills, in InputView it is the keyboard view
++     */
++    fun attach(view: View) {
++        anchor = view
++        view.addOnLayoutChangeListener(layoutListener)
++        if (view.width > 0 && view.height > 0) rebuild(view.width, view.height)
++    }
++
++    fun detach() {
++        anchor?.removeOnLayoutChangeListener(layoutListener)
++        anchor = null
++        bitmap = null
++    }
++
++    /**
++     * Drawables to redraw when the bitmap changes, since a key does not repaint by itself
++     */
++    fun register(drawable: Drawable) {
++        dependants.add(drawable)
++    }
++
++    /**
++     * Where the top left corner of [host] is, in the coordinates of the bitmap
++     */
++    fun originOf(host: View, out: PointF): Boolean {
++        val a = anchor ?: return false
++        a.getLocationInWindow(anchorLocation)
++        host.getLocationInWindow(hostLocation)
++        out.set(
++            (hostLocation[0] - anchorLocation[0]).toFloat(),
++            (hostLocation[1] - anchorLocation[1]).toFloat()
++        )
++        return true
++    }
++
++    private fun rebuild(w: Int, h: Int) {
++        if (w <= 0 || h <= 0) return
++        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
++        val canvas = Canvas(bmp)
++        // the drawable is shared with the ImageView that shows it, put its bounds back afterwards
++        val savedBounds = Rect(background.bounds)
++        try {
++            val dw = background.intrinsicWidth
++            val dh = background.intrinsicHeight
++            if (dw <= 0 || dh <= 0) {
++                background.setBounds(0, 0, w, h)
++                background.draw(canvas)
++            } else {
++                // same as ImageView.ScaleType.CENTER_CROP
++                val scale = max(w / dw.toFloat(), h / dh.toFloat())
++                canvas.translate((w - dw * scale) / 2f, (h - dh * scale) / 2f)
++                canvas.scale(scale, scale)
++                background.setBounds(0, 0, dw, dh)
++                background.draw(canvas)
++            }
++        } finally {
++            background.bounds = savedBounds
++        }
++        bitmap = bmp
++        dependants.toList().forEach { it.invalidateSelf() }
++    }
++}
++
++/**
++ * Draws the body of a [GlassKeyDrawable]. Returns false when it cannot (yet), then the drawable
++ * falls back to its plain translucent body.
++ */
++fun interface GlassBodyPainter {
++    fun drawBody(canvas: Canvas, rect: RectF, radius: Float, paint: Paint): Boolean
++}
++
++/**
++ * A thick convex lens over the background image:
++ *
++ * - inside the key it is almost flat, with a slight magnification,
++ * - within [BEVEL_DP] of the edge the sample point is pushed outwards, more and more towards the rim,
++ *   so that the background appears to bend over the edge,
++ * - red, green and blue are pushed by slightly different amounts (dispersion), which gives the
++ *   colored fringes that real glass has,
++ * - the very rim is a little darker, it reads as thickness.
++ *
++ * The same formulas are in tools/render_blur_demo.py, which draws the preview images. Keep them in sync.
++ */
++@RequiresApi(Build.VERSION_CODES.TIRAMISU)
++class RefractionPainter(
++    private val source: RefractionSource,
++    private val host: View,
++    private val density: Float,
++    owner: Drawable
++) : GlassBodyPainter {
++
++    private val shader: RuntimeShader? = try {
++        RuntimeShader(AGSL)
++    } catch (e: RuntimeException) {
++        Timber.w(e, "Glass refraction shader does not compile, keys are drawn without refraction")
++        null
++    }
++
++    private var bitmapShader: BitmapShader? = null
++    private var boundBitmap: Bitmap? = null
++    private val origin = PointF()
++
++    init {
++        source.register(owner)
++    }
++
++    override fun drawBody(canvas: Canvas, rect: RectF, radius: Float, paint: Paint): Boolean {
++        val rt = shader ?: return false
++        val bmp = source.bitmap ?: return false
++        if (!source.originOf(host, origin)) return false
++        if (bmp !== boundBitmap) {
++            val bs = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
++            rt.setInputShader("backdrop", bs)
++            bitmapShader = bs
++            boundBitmap = bmp
++        }
++        rt.setFloatUniform("box", rect.left, rect.top, rect.right, rect.bottom)
++        rt.setFloatUniform("radius", radius)
++        rt.setFloatUniform("bevel", BEVEL_DP * density)
++        rt.setFloatUniform("strength", STRENGTH_DP * density)
++        rt.setFloatUniform("aberration", ABERRATION)
++        rt.setFloatUniform("zoom", ZOOM)
++        rt.setFloatUniform("rimShade", RIM_SHADE)
++        rt.setFloatUniform("offset", origin.x, origin.y)
++        paint.shader = rt
++        canvas.drawRoundRect(rect, radius, radius, paint)
++        paint.shader = null
++        return true
++    }
++
++    companion object {
++        const val BEVEL_DP = 14f
++        const val STRENGTH_DP = 11f
++        const val ABERRATION = 0.06f
++        const val ZOOM = 0.97f
++        const val RIM_SHADE = 0.10f
++
++        private const val AGSL = """
++uniform shader backdrop;
++uniform float4 box;
++uniform float radius;
++uniform float bevel;
++uniform float strength;
++uniform float aberration;
++uniform float zoom;
++uniform float rimShade;
++uniform float2 offset;
++
++float2 outwardNormal(float2 d, float2 q) {
++    float2 n;
++    if (q.x > 0.0 && q.y > 0.0) {
++        n = q / max(length(q), 0.0001);
++    } else if (q.x > q.y) {
++        n = float2(1.0, 0.0);
++    } else {
++        n = float2(0.0, 1.0);
++    }
++    float sx = d.x < 0.0 ? -1.0 : 1.0;
++    float sy = d.y < 0.0 ? -1.0 : 1.0;
++    return float2(n.x * sx, n.y * sy);
++}
++
++half4 main(float2 p) {
++    float2 c = float2((box.x + box.z) * 0.5, (box.y + box.w) * 0.5);
++    float2 h = float2((box.z - box.x) * 0.5, (box.w - box.y) * 0.5);
++    float2 d = p - c;
++    float2 q = abs(d) - h + float2(radius, radius);
++    float sd = length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
++    float edge = 1.0 - clamp(-sd / bevel, 0.0, 1.0);
++    float k = edge * edge * edge;
++    float2 n = outwardNormal(d, q);
++    float2 base = c + d * zoom;
++    float2 shift = n * (strength * k);
++    half cr = backdrop.eval(base + shift * (1.0 + aberration) + offset).r;
++    half cg = backdrop.eval(base + shift + offset).g;
++    half cb = backdrop.eval(base + shift * (1.0 - aberration) + offset).b;
++    half shade = 1.0 - rimShade * k;
++    return half4(cr * shade, cg * shade, cb * shade, 1.0);
++}
++"""
++    }
++}
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
+index 6238195..c3624b1 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyDrawable.kt
+@@ -10,6 +10,8 @@ import android.graphics.drawable.Drawable
+ import android.graphics.drawable.GradientDrawable
+ import android.graphics.drawable.InsetDrawable
+ import android.graphics.drawable.LayerDrawable
++import android.os.Build
++import android.view.View
+ import androidx.annotation.ColorInt
+ 
+ fun radiusDrawable(
+@@ -87,8 +89,13 @@ fun glassKeyBackgroundDrawable(
+     density: Float,
+     accent: Boolean,
+     hMargin: Int,
+-    vMargin: Int
+-): Drawable = InsetDrawable(
+-    GlassKeyDrawable(bkgColor, radius, dark, density, accent),
+-    hMargin, vMargin, hMargin, vMargin
+-)
++    vMargin: Int,
++    host: View,
++    refraction: RefractionSource?
++): Drawable {
++    val glass = GlassKeyDrawable(bkgColor, radius, dark, density, accent)
++    if (refraction != null && !accent && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++        glass.bodyPainter = RefractionPainter(refraction, host, density, glass)
++    }
++    return InsetDrawable(glass, hMargin, vMargin, hMargin, vMargin)
++}
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+index 52a4509..8edfa5e 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/KeyView.kt
+@@ -130,7 +130,8 @@ abstract class KeyView(ctx: Context, val theme: Theme, val def: KeyDef.Appearanc
+             // background: key border
+             appearanceView.background = if (glass) glassKeyBackgroundDrawable(
+                 bkgColor, theme.isDark, radius, resources.displayMetrics.density,
+-                def.variant == Variant.Accent, hMargin, vMargin
++                def.variant == Variant.Accent, hMargin, vMargin,
++                appearanceView, GlassRefraction.source
+             ) else if (borderStroke) borderedKeyBackgroundDrawable(
+                 bkgColor, theme.keyShadowColor,
+                 radius, borderOrShadowWidth, hMargin, vMargin
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 5d46ced..68aa6eb 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -108,6 +108,8 @@
+     <string name="glass_blur">实时玻璃模糊</string>
+     <string name="glass_blur_summary">模糊键盘后方的内容(需要 Android 12+)。搭配半透明主题并开启按键边框效果最佳;系统关闭模糊时会自动回退为主题背景。</string>
+     <string name="glass_blur_radius">玻璃模糊半径</string>
++    <string name="glass_refraction">玻璃折射</string>
++    <string name="glass_refraction_summary">按键像厚玻璃一样折射键盘自带的背景图(需要 Android 13+ 和玻璃按键样式)。背景图有层次时效果最好,例如 LiquidGlassCrystal 主题。与实时模糊互斥,开启后实时模糊不生效。</string>
+     <string name="glass_keys">玻璃按键样式</string>
+     <string name="glass_keys_summary">半透明胶囊按键,带镜面高光描边和柔和投影。需要启用按键边框;按键圆角 16–20 dp、搭配半透明主题效果最佳。</string>
+     <string name="brightness">亮度</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index e0bc2ba..a391ce9 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -108,6 +108,8 @@
+     <string name="glass_blur">Real-time glass blur</string>
+     <string name="glass_blur_summary">Blur the content behind the keyboard (Android 12+). Works best with a translucent theme and key border enabled. Falls back to the theme background when the system disables blur.</string>
+     <string name="glass_blur_radius">Glass blur radius</string>
++    <string name="glass_refraction">Glass refraction</string>
++    <string name="glass_refraction_summary">Keys bend the keyboard\'s own background image like thick glass (Android 13+, needs glass key style). Works best with a background that has structure, such as the LiquidGlassCrystal theme. Replaces real-time blur.</string>
+     <string name="glass_keys">Glass key style</string>
+     <string name="glass_keys_summary">Translucent capsule keys with a specular rim and soft shadow. Requires key border; a key radius of 16–20 dp and a translucent theme look best.</string>
+     <string name="brightness">Brightness</string>
+-- 
+2.43.0
+

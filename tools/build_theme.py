@@ -151,6 +151,66 @@ def default_backdrop(dark: bool) -> Image.Image:
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
+def crisp_backdrop(dark: bool, w: int = BG_W, h: int = BG_H) -> Image.Image:
+    """A vivid backdrop with *crisp* shapes. Heavily blurred backgrounds give a lens nothing to bend,
+    so the glass keys of the refraction mode need edges to refract."""
+    if dark:
+        base, blobs = (16, 18, 44), ((0.1, 0.1, 0.9, (70, 52, 200)), (0.95, 0.5, 0.8, (200, 40, 120)),
+                                      (0.3, 0.95, 0.8, (0, 120, 220)))
+        shapes = [("disc", 0.18, 0.30, 0.17, (255, 80, 140), (255, 160, 90)),
+                  ("disc", 0.74, 0.20, 0.13, (80, 220, 255), (60, 120, 255)),
+                  ("ring", 0.52, 0.62, 0.20, (255, 214, 10), None),
+                  ("disc", 0.88, 0.78, 0.16, (120, 255, 190), (30, 200, 160)),
+                  ("band", 0.0, 0.0, 0.0, (170, 110, 255), (90, 60, 220))]
+    else:
+        base, blobs = (238, 241, 252), ((0.1, 0.1, 0.9, (150, 190, 255)), (0.95, 0.5, 0.8, (255, 170, 205)),
+                                         (0.3, 0.95, 0.8, (140, 225, 255)))
+        shapes = [("disc", 0.18, 0.30, 0.17, (255, 94, 140), (255, 170, 100)),
+                  ("disc", 0.74, 0.20, 0.13, (60, 200, 255), (60, 120, 255)),
+                  ("ring", 0.52, 0.62, 0.20, (255, 196, 0), None),
+                  ("disc", 0.88, 0.78, 0.16, (80, 230, 170), (20, 190, 150)),
+                  ("band", 0.0, 0.0, 0.0, (160, 110, 255), (100, 70, 230))]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    a = np.zeros((h, w, 3), np.float32) + np.array(base, np.float32)
+    for bx, by, br, rgb in blobs:
+        d = np.hypot(xx - bx * w, yy - by * h) / (br * w)
+        wgt = np.clip(1 - d, 0, 1) ** 1.6
+        a = a * (1 - wgt[..., None]) + np.array(rgb, np.float32) * wgt[..., None]
+    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    S = 3  # draw shapes supersampled for clean edges
+    big = Image.new("RGBA", (w * S, h * S))
+    for kind, cx, cy, rr, c0, c1 in shapes:
+        layer = Image.new("RGBA", big.size)
+        m = Image.new("L", big.size, 0)
+        md = ImageDraw.Draw(m)
+        R = rr * w * S
+        if kind == "disc":
+            md.ellipse((cx * w * S - R, cy * h * S - R, cx * w * S + R, cy * h * S + R), fill=255)
+        elif kind == "ring":
+            md.ellipse((cx * w * S - R, cy * h * S - R, cx * w * S + R, cy * h * S + R), fill=255)
+            r2 = R * 0.62
+            md.ellipse((cx * w * S - r2, cy * h * S - r2, cx * w * S + r2, cy * h * S + r2), fill=0)
+        else:  # diagonal ribbon
+            md.polygon([(0, 0.78 * h * S), (w * S, 0.34 * h * S), (w * S, 0.46 * h * S), (0, 0.90 * h * S)], fill=255)
+        if c1 is None:
+            col = Image.new("RGBA", big.size, c0 + (255,))
+        else:  # vertical gradient fill
+            t = np.linspace(0, 1, big.size[1], dtype=np.float32)[:, None, None]
+            g = np.array(c0, np.float32) * (1 - t) + np.array(c1, np.float32) * t
+            col = Image.fromarray(np.repeat(g, big.size[0], axis=1).astype(np.uint8)).convert("RGBA")
+        layer.paste(col, (0, 0), m)
+        big.alpha_composite(layer)
+    # thin bright lines: they make the bending of the lens easy to see
+    ld = ImageDraw.Draw(big, "RGBA")
+    for i in range(1, 7):
+        y = int(h * S * (0.12 + i * 0.14))
+        ld.line([(0, y), (w * S, y - int(0.10 * h * S))], fill=(255, 255, 255, 90 if not dark else 70), width=3 * S)
+    shapes_img = big.resize((w, h), Image.LANCZOS)
+    img = img.convert("RGBA")
+    img.alpha_composite(shapes_img)
+    return img.convert("RGB")
+
+
 def theme_json(name: str, palette: dict, cropped: str, src: str) -> dict:
     p = dict(palette)
     is_dark = p.pop("isDark")
@@ -289,6 +349,8 @@ def main():
     for name, palette in PALETTES.items():
         dark = palette["isDark"]
         build(name, palette, glassify(default_backdrop(dark), dark))
+        # same colors on a backdrop with crisp shapes, for the glass refraction mode of the patched app
+        build(name.replace("LiquidGlass", "LiquidGlassCrystal"), palette, crisp_backdrop(dark))
 
 
 if __name__ == "__main__":

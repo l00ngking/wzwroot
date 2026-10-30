@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simulated rendering of the "glass" patches (patches/0001 blur backdrop, patches/0003 glass keys).
+Simulated rendering of the "glass" patches (0001 blur backdrop, 0003 glass keys, 0004 refraction).
 This is NOT a device screenshot: a mock edge-to-edge chat app is drawn so that its content runs
 behind the keyboard, the keyboard region is blurred like GlassBackdrop does, and the keys are
 drawn with the same recipe as GlassKeyDrawable (GLASS below mirrors the constants in that class).
@@ -138,7 +138,57 @@ def paint(size, rgb, alpha_arr, mask):
     return Image.fromarray(arr, "RGBA")
 
 
-def glass_key(layer, box, r, rgb, dark, accent=False):
+LOCAL_SIZE = (0, 0)  # size of the local key canvas, set by glass_key
+
+# Keep in sync with RefractionPainter (GlassRefraction.kt)
+BEVEL_DP, STRENGTH_DP, ABERRATION, ZOOM, RIM_SHADE = 14.0, 11.0, 0.06, 0.97, 0.10
+REFRACTED_TINT_SCALE = 0.5
+
+
+def bilinear(img, x, y):
+    """Sample img (H, W, 3 float) at continuous pixel coordinates, pixel centers at +0.5, clamped."""
+    h, w = img.shape[:2]
+    x = np.clip(x - 0.5, 0, w - 1)
+    y = np.clip(y - 0.5, 0, h - 1)
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    top = img[y0, x0] * (1 - fx) + img[y0, x1] * fx
+    bot = img[y1, x0] * (1 - fx) + img[y1, x1] * fx
+    return top * (1 - fy) + bot * fy
+
+
+def refract(backdrop, box, r, origin):
+    """numpy version of the AGSL in RefractionPainter. Everything is in 1x pixels; `box` and `origin`
+    are given in supersampled pixels and converted. Returns an (H, W, 3) float image in 0..255."""
+    x0, y0, x1, y1 = [v / SS for v in box]
+    ox, oy = origin[0] / SS, origin[1] / SS  # local canvas origin, in backdrop coordinates
+    lw, lh = LOCAL_SIZE
+    yy, xx = np.mgrid[0:lh, 0:lw].astype(np.float32)
+    px, py = (xx + 0.5) / SS, (yy + 0.5) / SS
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    hx, hy = (x1 - x0) / 2, (y1 - y0) / 2
+    dx, dy = px - cx, py - cy
+    rad = r / SS
+    qx, qy = np.abs(dx) - hx + rad, np.abs(dy) - hy + rad
+    sd = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - rad
+    bevel = BEVEL_DP * DENSITY
+    edge = 1 - np.clip(-sd / bevel, 0, 1)
+    k = edge ** 3
+    qlen = np.maximum(np.hypot(qx, qy), 1e-4)
+    nx = np.where((qx > 0) & (qy > 0), qx / qlen, np.where(qx > qy, 1.0, 0.0))
+    ny = np.where((qx > 0) & (qy > 0), qy / qlen, np.where(qx > qy, 0.0, 1.0))
+    nx = nx * np.where(dx < 0, -1.0, 1.0)
+    ny = ny * np.where(dy < 0, -1.0, 1.0)
+    bx, by = cx + dx * ZOOM, cy + dy * ZOOM
+    sx, sy = nx * STRENGTH_DP * DENSITY * k, ny * STRENGTH_DP * DENSITY * k
+    out = np.empty((lh, lw, 3), np.float32)
+    for ch, scale in enumerate((1 + ABERRATION, 1.0, 1 - ABERRATION)):
+        out[..., ch] = bilinear(backdrop[..., ch:ch + 1], bx + sx * scale + ox, by + sy * scale + oy)[..., 0]
+    return out * (1 - RIM_SHADE * k)[..., None]
+
+
+def glass_key(layer, box, r, rgb, dark, accent=False, backdrop=None):
     """Draw one key. All sizes are in supersampled pixels. Mirrors GlassKeyDrawable.draw().
     Works on a small local canvas, the full layer is far too big for per-key numpy work."""
     g = GLASS[dark]
@@ -161,6 +211,16 @@ def glass_key(layer, box, r, rgb, dark, accent=False):
     # 2. glass body: vertical alpha gradient of the key color
     body = rrect_mask(size, box, r)
     top, bot = (0.88, 0.80) if accent else (g["body_top"], g["body_bottom"])
+    if backdrop is not None and not accent:
+        # refracted copy of the background, with a lighter tint on top
+        global LOCAL_SIZE
+        LOCAL_SIZE = size
+        lens = refract(backdrop, box, r, (ox, oy))
+        arr = np.zeros(size[::-1] + (4,), np.uint8)
+        arr[..., :3] = np.clip(lens, 0, 255).astype(np.uint8)
+        arr[..., 3] = np.asarray(body, np.uint8)
+        over(local, Image.fromarray(arr, "RGBA"))
+        top, bot = top * REFRACTED_TINT_SCALE, bot * REFRACTED_TINT_SCALE
     over(local, paint(size, rgb, top + (bot - top) * ty, body))
 
     # 3. sheen over the upper half
@@ -184,7 +244,7 @@ def glass_key(layer, box, r, rgb, dark, accent=False):
     layer.alpha_composite(local, (ox, oy))
 
 
-def glass_keyboard(palette: dict, dark: bool) -> Image.Image:
+def glass_keyboard(palette: dict, dark: bool, backdrop=None) -> Image.Image:
     """Candidate bar + glass keys on a transparent layer."""
     s = SS
     layer = Image.new("RGBA", (W * s, KB_H * s))
@@ -209,7 +269,7 @@ def glass_keyboard(palette: dict, dark: bool) -> Image.Image:
 
     def key(x0, y0, x1, y1, label, rgb, color=txt, size=48, accent=False):
         box = ((x0 + 7) * s, (y0 + 12) * s, (x1 - 7) * s, (y1 - 12) * s)
-        glass_key(layer, box, r, rgb, dark, accent)
+        glass_key(layer, box, r, rgb, dark, accent, backdrop)
         ImageDraw.Draw(layer).text(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2), label,
                                    font=font(size * s), anchor="mm", fill=color)
 
@@ -298,6 +358,24 @@ def main():
         close = after.crop((0, KB_Y - 160, W, H))
         close.save(out_dir / f"demo_glass_{name}_closeup.png", optimize=True)
         print("wrote", out)
+
+        # refraction mode: the keys bend the keyboard's own (crisp) background image
+        crisp = np.asarray(bt.crisp_backdrop(dark, W, KB_H), np.float32)
+        kb_bg = Image.fromarray(crisp.astype(np.uint8))
+        plain = compose(app, kb_bg, glass_keyboard(palette, dark))
+        refr = compose(app, kb_bg, glass_keyboard(palette, dark, crisp))
+        a = caption(plain, "玻璃按键 · 无折射", "补丁 0003")
+        b = caption(refr, "玻璃按键 + 折射", "补丁 0004 · 折射键盘自带的背景图")
+        sheet = Image.new("RGB", (a.width * 2 + gap, a.height), (24, 24, 27))
+        sheet.paste(a, (0, 0))
+        sheet.paste(b, (a.width + gap, 0))
+        sheet = sheet.resize((sheet.width // 2, sheet.height // 2), Image.LANCZOS)
+        sheet.save(out_dir / f"demo_refraction_{name}.png", optimize=True)
+        stack = Image.new("RGB", (W, (H - KB_Y + 20) * 2 + 10), (24, 24, 27))
+        stack.paste(plain.crop((0, KB_Y - 20, W, H)), (0, 0))
+        stack.paste(refr.crop((0, KB_Y - 20, W, H)), (0, H - KB_Y + 30))
+        stack.save(out_dir / f"demo_refraction_{name}_closeup.png", optimize=True)
+        print("wrote refraction", name)
 
 
 if __name__ == "__main__":
