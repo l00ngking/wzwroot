@@ -206,10 +206,9 @@ def find_font(size):
     return ImageFont.load_default()
 
 
-def render_preview(name: str, palette: dict, bg: Image.Image) -> Path:
-    """Approximate the keyboard as the app draws it (key border + stroke on, radius 12dp)."""
-    W, H = BG_W, 860
-    canvas = bg.resize((W, H)).convert("RGBA")
+def keyboard_layer(palette: dict, W: int = BG_W, H: int = 860) -> Image.Image:
+    """Transparent RGBA layer with candidate bar and keys, as the app draws them
+    (key border + stroke on, radius 12dp)."""
     layer = Image.new("RGBA", (W, H))
     d = ImageDraw.Draw(layer)
     font, small = find_font(44), find_font(30)
@@ -256,7 +255,13 @@ def render_preview(name: str, palette: dict, bg: Image.Image) -> Path:
     key(m + kw * 8, y, W - m, y + rh, palette["accentKeyBackgroundColor"], "return",
         palette["accentKeyTextColor"], small)
 
-    canvas = Image.alpha_composite(canvas, layer).convert("RGB")
+    return layer
+
+
+def render_preview(name: str, palette: dict, bg: Image.Image) -> Path:
+    W, H = BG_W, 860
+    canvas = bg.resize((W, H)).convert("RGBA")
+    canvas = Image.alpha_composite(canvas, keyboard_layer(palette, W, H)).convert("RGB")
     PREVIEW.mkdir(exist_ok=True)
     out = PREVIEW / f"{name}.png"
     canvas.save(out, optimize=True)

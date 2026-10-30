@@ -62,6 +62,13 @@ cd fcitx5-android && ./gradlew assembleRelease
 
 ### 0001 · 实时玻璃模糊
 
+| 浅色 | 深色 |
+| --- | --- |
+| ![blur light](preview/demo_blur_LiquidGlassLight.png) | ![blur dark](preview/demo_blur_LiquidGlassDark.png) |
+
+> 这是**模拟渲染**(`tools/render_blur_demo.py`:对模拟应用界面做高斯模糊,再叠上补丁里同样的着色),不是真机截图。左边是主题自带的静态背景,右边是实时模糊。
+
+
 主题设置里新增「实时玻璃模糊」开关和「玻璃模糊半径」(Android 12+,默认关)。
 
 - IME 窗口本身是全屏的(按键气泡要画在键盘外面),直接用 `Window.setBackgroundBlurRadius` 会把整个屏幕都模糊掉。所以改为在键盘正下方放一个**不可触摸的子窗口**(`TYPE_APPLICATION_MEDIA`,层级在 IME 窗口之下),只对它设置 `blurBehindRadius`,按键仍然画在模糊层之上。
@@ -85,6 +92,7 @@ cd fcitx5-android && ./gradlew assembleRelease
 ```
 tools/build_theme.py   主题生成脚本(配色、背景、打包、预览图)
 tools/apply_patches.sh 克隆上游并应用源码补丁
+tools/render_blur_demo.py 实时模糊的模拟效果图
 patches/*.patch        实时模糊、剪贴板加密两个源码补丁
 dist/*.zip             可直接导入的主题包
 preview/*.png          预览图
