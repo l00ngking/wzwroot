@@ -1,23 +1,25 @@
-From 95ebeea968b92e7dc6b33c008b4aacf285aeda93 Mon Sep 17 00:00:00 2001
+From f37ab3b46144aaa13ffdc0e6a66750c685d08e2e Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 30 Oct 2026 16:45:17 +0000
 Subject: [PATCH 4/4] Add glass refraction for keys
 
 Keys sample the keyboard's own background image through an AGSL lens shader
-(Android 13+): almost flat inside, bending over the edge, with dispersion and a
-slightly darker rim. Switch "Glass refraction", needs glass key style, and is
-exclusive with the real-time blur since it refracts the keyboard background
-rather than the content behind the window.
+(Android 13+): almost flat inside, bending over the edge, with chromatic
+aberration (7 spectral samples along the bend, blue bends the most) that turns
+into a rainbow fringe along the curved key edge, and a slightly darker rim.
+Switch "Glass refraction", needs glass key style, and is exclusive with the
+real-time blur since it refracts the keyboard background rather than the content
+behind the window.
 ---
  .../fcitx5/android/data/theme/ThemePrefs.kt   |   9 +
  .../fcitx/fcitx5/android/input/InputView.kt   |  20 +-
  .../input/keyboard/GlassKeyDrawable.kt        |  19 +-
- .../android/input/keyboard/GlassRefraction.kt | 236 ++++++++++++++++++
+ .../android/input/keyboard/GlassRefraction.kt | 248 ++++++++++++++++++
  .../android/input/keyboard/KeyDrawable.kt     |  17 +-
  .../fcitx5/android/input/keyboard/KeyView.kt  |   3 +-
  app/src/main/res/values-zh-rCN/strings.xml    |   2 +
  app/src/main/res/values/strings.xml           |   2 +
- 8 files changed, 300 insertions(+), 8 deletions(-)
+ 8 files changed, 312 insertions(+), 8 deletions(-)
  create mode 100644 app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
 
 diff --git a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
@@ -159,10 +161,10 @@ index 64cee62..a3d4562 100644
          private const val SHADOW_OFFSET_DP = 1.0f
 diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
 new file mode 100644
-index 0000000..5cc262d
+index 0000000..edea8aa
 --- /dev/null
 +++ b/app/src/main/java/org/fcitx/fcitx5/android/input/keyboard/GlassRefraction.kt
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,248 @@
 +/*
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + * SPDX-FileCopyrightText: Copyright 2025 Fcitx5 for Android Contributors
@@ -294,8 +296,10 @@ index 0000000..5cc262d
 + * - inside the key it is almost flat, with a slight magnification,
 + * - within [BEVEL_DP] of the edge the sample point is pushed outwards, more and more towards the rim,
 + *   so that the background appears to bend over the edge,
-+ * - red, green and blue are pushed by slightly different amounts (dispersion), which gives the
-+ *   colored fringes that real glass has,
++ * - chromatic aberration: the light is sampled 7 times along the bend, with blue pushed furthest and
++ *   red least, and the samples are weighted by wavelength. Along the curved edge of the key this
++ *   becomes a continuous rainbow fringe. The dispersion reaches further into the bevel than the
++ *   bend itself ([ABERRATION] is relative to [STRENGTH_DP]),
 + * - the very rim is a little darker, it reads as thickness.
 + *
 + * The same formulas are in tools/render_blur_demo.py, which draws the preview images. Keep them in sync.
@@ -350,7 +354,7 @@ index 0000000..5cc262d
 +    companion object {
 +        const val BEVEL_DP = 14f
 +        const val STRENGTH_DP = 11f
-+        const val ABERRATION = 0.06f
++        const val ABERRATION = 0.95f
 +        const val ZOOM = 0.97f
 +        const val RIM_SHADE = 0.10f
 +
@@ -388,13 +392,23 @@ index 0000000..5cc262d
 +    float edge = 1.0 - clamp(-sd / bevel, 0.0, 1.0);
 +    float k = edge * edge * edge;
 +    float2 n = outwardNormal(d, q);
-+    float2 base = c + d * zoom;
-+    float2 shift = n * (strength * k);
-+    half cr = backdrop.eval(base + shift * (1.0 + aberration) + offset).r;
-+    half cg = backdrop.eval(base + shift + offset).g;
-+    half cb = backdrop.eval(base + shift * (1.0 - aberration) + offset).b;
++    float kd = edge * edge;
++    float2 base = c + d * zoom + offset;
++    // 7 samples along the bend, blue bends the most and red the least, like in real glass
++    half3 acc = half3(0.0, 0.0, 0.0);
++    half3 wsum = half3(0.0, 0.0, 0.0);
++    for (int i = 0; i < 7; i++) {
++        float t = (float(i) - 3.0) / 3.0;
++        float2 pos = base + n * (strength * k + strength * aberration * kd * t);
++        half3 col = backdrop.eval(pos).rgb;
++        half3 w = half3(clamp(1.0 - (t + 1.0) / 1.1, 0.0, 1.0),
++                        clamp(1.0 - abs(t) / 0.9, 0.0, 1.0),
++                        clamp(1.0 - (1.0 - t) / 1.1, 0.0, 1.0));
++        acc += col * w;
++        wsum += w;
++    }
 +    half shade = 1.0 - rimShade * k;
-+    return half4(cr * shade, cg * shade, cb * shade, 1.0);
++    return half4(acc / wsum * shade, 1.0);
 +}
 +"""
 +    }

@@ -141,7 +141,8 @@ def paint(size, rgb, alpha_arr, mask):
 LOCAL_SIZE = (0, 0)  # size of the local key canvas, set by glass_key
 
 # Keep in sync with RefractionPainter (GlassRefraction.kt)
-BEVEL_DP, STRENGTH_DP, ABERRATION, ZOOM, RIM_SHADE = 14.0, 11.0, 0.06, 0.97, 0.10
+BEVEL_DP, STRENGTH_DP, ABERRATION, ZOOM, RIM_SHADE = 14.0, 11.0, 0.95, 0.97, 0.10
+TAPS = 7  # spectral samples per pixel
 REFRACTED_TINT_SCALE = 0.5
 
 
@@ -181,10 +182,31 @@ def refract(backdrop, box, r, origin):
     nx = nx * np.where(dx < 0, -1.0, 1.0)
     ny = ny * np.where(dy < 0, -1.0, 1.0)
     bx, by = cx + dx * ZOOM, cy + dy * ZOOM
-    sx, sy = nx * STRENGTH_DP * DENSITY * k, ny * STRENGTH_DP * DENSITY * k
+    strength = STRENGTH_DP * DENSITY
+    kd = edge ** 2  # dispersion reaches further in than the bend itself
     out = np.empty((lh, lw, 3), np.float32)
-    for ch, scale in enumerate((1 + ABERRATION, 1.0, 1 - ABERRATION)):
-        out[..., ch] = bilinear(backdrop[..., ch:ch + 1], bx + sx * scale + ox, by + sy * scale + oy)[..., 0]
+    # outside the bevel there is no bend and no dispersion: a single sample is enough
+    out[:] = bilinear(backdrop, bx + ox, by + oy)
+    inside = edge > 0.01
+    ix = np.nonzero(inside)
+    bxi, byi = bx[ix], by[ix]
+    nxi, nyi = nx[ix], ny[ix]
+    shift = strength * k[ix]
+    spread = strength * ABERRATION * kd[ix]
+    acc = np.zeros((len(bxi), 3), np.float32)
+    wsum = np.zeros(3, np.float32)
+    for i in range(TAPS):
+        t = (i - (TAPS - 1) / 2) / ((TAPS - 1) / 2)  # -1 .. 1
+        # blue bends the most, red the least, like in real glass; weights are triangles over t
+        w = np.array([np.clip(1 - (t + 1) / 1.1, 0, 1),   # red, peaks at t = -1
+                      np.clip(1 - abs(t) / 0.9, 0, 1),     # green, peaks at t = 0
+                      np.clip(1 - (1 - t) / 1.1, 0, 1)],   # blue, peaks at t = 1
+                     np.float32)
+        d = shift + spread * t
+        c = bilinear(backdrop, bxi + nxi * d + ox, byi + nyi * d + oy)
+        acc += c * w
+        wsum += w
+    out[ix] = acc / wsum
     return out * (1 - RIM_SHADE * k)[..., None]
 
 
