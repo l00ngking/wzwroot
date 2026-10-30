@@ -1,0 +1,134 @@
+name: Build patched Fcitx5
+
+# Clones fcitx5-android at the commit the patches were made against, applies patches/*.patch,
+# builds a signed release APK and attaches it to a GitHub release.
+on:
+  push:
+    branches: ["claude/**"]
+    paths:
+      - "patches/**"
+      - "sounds/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: "ABIs to build, comma separated (arm64-v8a is what almost every phone and tablet needs)"
+        default: "arm64-v8a"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_COMMIT: eb5b50216e70484a009933d9519db76005f1faf3
+  # Convenience key, kept in the Actions cache so that every build is signed the same way and can be
+  # installed over the previous one. It is not a secret: do not use it for anything else.
+  SIGN_KEY_PWD: liquidglass-ci
+  SIGN_KEY_ALIAS: liquidglass
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Fetch patches
+        uses: actions/checkout@v7
+        with:
+          path: patches-repo
+
+      - name: Fetch upstream source
+        uses: actions/checkout@v7
+        with:
+          repository: fcitx5-android/fcitx5-android
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: fcitx5-android
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply patches
+        working-directory: fcitx5-android
+        run: |
+          git config user.name "build"
+          git config user.email "build@localhost"
+          git am "$GITHUB_WORKSPACE"/patches-repo/patches/*.patch
+          git log --oneline -8
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Android environment
+        uses: android-actions/setup-android@v4
+
+      - name: Install CMake
+        run: sdkmanager --install "cmake;3.31.6"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install extra-cmake-modules gettext
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore signing key
+        id: key-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: signing/release.jks
+          key: signing-key-v1
+
+      - name: Create signing key
+        if: steps.key-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p signing
+          keytool -genkeypair -keystore signing/release.jks \
+            -storepass "$SIGN_KEY_PWD" -keypass "$SIGN_KEY_PWD" -alias "$SIGN_KEY_ALIAS" \
+            -keyalg RSA -keysize 4096 -validity 36500 \
+            -dname "CN=LiquidGlass Fcitx5, O=personal build"
+
+      - name: Save signing key
+        if: steps.key-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: signing/release.jks
+          key: signing-key-v1
+
+      - name: Build release APK
+        working-directory: fcitx5-android
+        env:
+          BUILD_ABI: ${{ inputs.abi || 'arm64-v8a' }}
+          SIGN_KEY_FILE: ${{ github.workspace }}/signing/release.jks
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          for f in fcitx5-android/app/build/outputs/apk/release/*.apk; do
+            cp "$f" "out/liquidglass-$(basename "$f")"
+          done
+          ls -la out
+          # a signed APK is what makes it installable
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs out/*.apk | head -5
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk
+          path: out/*.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" out/*.apk \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Liquid Glass build ${GITHUB_RUN_NUMBER}" \
+            --notes "Upstream fcitx5-android ${UPSTREAM_COMMIT:0:7} + patches from ${GITHUB_SHA:0:7}." \
+            --prerelease
