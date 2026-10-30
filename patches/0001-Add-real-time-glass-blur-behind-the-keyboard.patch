@@ -1,0 +1,301 @@
+From aa844ab6da1d3bf193432eb7ceff22e617af883d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 15:56:44 +0000
+Subject: [PATCH 1/2] Add real-time glass blur behind the keyboard
+
+Blur the content behind the keyboard with a non-touchable sub-window placed
+under the keyboard view (cross-window blur, Android 12+), and fall back to the
+static theme background when blur is not available.
+
+Adds the "Real-time glass blur" switch and radius to the theme preferences.
+---
+ .../fcitx5/android/data/theme/ThemePrefs.kt   |  11 ++
+ .../fcitx5/android/input/GlassBackdrop.kt     | 166 ++++++++++++++++++
+ .../fcitx/fcitx5/android/input/InputView.kt   |  24 ++-
+ app/src/main/res/values-zh-rCN/strings.xml    |   3 +
+ app/src/main/res/values/strings.xml           |   3 +
+ 5 files changed, 206 insertions(+), 1 deletion(-)
+ create mode 100644 app/src/main/java/org/fcitx/fcitx5/android/input/GlassBackdrop.kt
+
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+index d3b4948..f8e13ed 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/data/theme/ThemePrefs.kt
+@@ -43,6 +43,17 @@ class ThemePrefs(sharedPreferences: SharedPreferences) :
+ 
+     val keyRippleEffect = switch(R.string.key_ripple_effect, "key_ripple_effect", false)
+ 
++    val glassBlur = switch(
++        R.string.glass_blur, "glass_blur", false,
++        summary = R.string.glass_blur_summary,
++        enableUiOn = { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S }
++    )
++
++    val glassBlurRadius = int(
++        R.string.glass_blur_radius, "glass_blur_radius", 24, 4, 80, "dp",
++        enableUiOn = { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur.getValue() }
++    )
++
+     val keyHorizontalMargin: ManagedPreference.PInt
+     val keyHorizontalMarginLandscape: ManagedPreference.PInt
+ 
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/GlassBackdrop.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/GlassBackdrop.kt
+new file mode 100644
+index 0000000..05ad5b8
+--- /dev/null
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/GlassBackdrop.kt
+@@ -0,0 +1,166 @@
++/*
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ * SPDX-FileCopyrightText: Copyright 2025 Fcitx5 for Android Contributors
++ */
++
++package org.fcitx.fcitx5.android.input
++
++import android.graphics.Color
++import android.graphics.drawable.ColorDrawable
++import android.graphics.drawable.LayerDrawable
++import android.os.Build
++import android.view.Gravity
++import android.view.View
++import android.view.ViewTreeObserver
++import android.view.WindowManager
++import android.widget.PopupWindow
++import androidx.annotation.RequiresApi
++import androidx.core.graphics.ColorUtils
++import org.fcitx.fcitx5.android.data.theme.Theme
++import timber.log.Timber
++import java.util.function.Consumer
++
++/**
++ * Real-time "liquid glass" backdrop: blurs whatever is *behind* the keyboard.
++ *
++ * The IME window is full screen (it has to be, key popups and the floating candidates view
++ * are drawn outside of the keyboard), so `Window#setBackgroundBlurRadius` on it would blur the
++ * whole screen. Instead we put a non-touchable sub-window of type
++ * [WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA] exactly under [target]. Such a window is
++ * z-ordered *below* the IME window, so keys are drawn on top of the blur, and `blurBehindRadius`
++ * on it only affects its own rectangle.
++ *
++ * The backdrop is only active while cross-window blur is available (Android 12+, not disabled by
++ * battery saver or the vendor). Whenever its state changes, [onActiveChanged] is called so that the
++ * caller can show the static theme background instead (as the fallback).
++ */
++@RequiresApi(Build.VERSION_CODES.S)
++class GlassBackdrop(
++    private val anchor: View,
++    private val target: View,
++    private val theme: Theme,
++    private val blurRadiusPx: Int,
++    private val onActiveChanged: (Boolean) -> Unit
++) {
++
++    private val context = anchor.context
++    private val windowManager = context.getSystemService(WindowManager::class.java)
++
++    private val popup = PopupWindow(context).apply {
++        // the sub-window must never take focus or touches, or it would steal them from the IME window
++        isFocusable = false
++        isTouchable = false
++        isClippingEnabled = false
++        inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
++        elevation = 0f
++        setBackgroundDrawable(null)
++        windowLayoutType = WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA
++        contentView = View(context).apply { background = tintDrawable() }
++    }
++
++    private var started = false
++    private var crossWindowBlurEnabled = false
++    private var active = false
++
++    // last applied geometry: x, y, width, height
++    private val rect = intArrayOf(-1, -1, -1, -1)
++    private val location = intArrayOf(0, 0)
++
++    private fun tintDrawable(): LayerDrawable {
++        val base = ColorUtils.setAlphaComponent(
++            theme.keyboardColor, if (theme.isDark) 0x8C else 0x99
++        )
++        val rim = ColorUtils.setAlphaComponent(Color.WHITE, if (theme.isDark) 0x33 else 0x99)
++        return LayerDrawable(arrayOf(ColorDrawable(base), ColorDrawable(rim))).apply {
++            // 1dp specular rim along the top edge
++            setLayerGravity(1, Gravity.TOP or Gravity.FILL_HORIZONTAL)
++            setLayerHeight(1, context.resources.displayMetrics.density.toInt().coerceAtLeast(1))
++        }
++    }
++
++    private val crossWindowBlurListener = Consumer<Boolean> { enabled ->
++        crossWindowBlurEnabled = enabled
++        anchor.post { sync() }
++    }
++
++    private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { sync() }
++
++    fun start() {
++        if (started) return
++        started = true
++        crossWindowBlurEnabled = windowManager.isCrossWindowBlurEnabled
++        windowManager.addCrossWindowBlurEnabledListener(anchor.context.mainExecutor, crossWindowBlurListener)
++        anchor.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
++        anchor.post { sync() }
++    }
++
++    fun stop() {
++        if (!started) return
++        started = false
++        windowManager.removeCrossWindowBlurEnabledListener(crossWindowBlurListener)
++        if (anchor.viewTreeObserver.isAlive) {
++            anchor.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
++        }
++        hide()
++        setActive(false)
++    }
++
++    private fun setActive(value: Boolean) {
++        if (active == value) return
++        active = value
++        onActiveChanged(value)
++    }
++
++    private fun hide() {
++        rect.fill(-1)
++        if (popup.isShowing) popup.dismiss()
++    }
++
++    private fun sync() {
++        if (!started) return
++        val shouldShow = crossWindowBlurEnabled && anchor.isAttachedToWindow &&
++                anchor.windowToken != null && target.isShown &&
++                target.width > 0 && target.height > 0
++        if (!shouldShow) {
++            hide()
++            setActive(false)
++            return
++        }
++        try {
++            target.getLocationInWindow(location)
++            val x = location[0]
++            val y = location[1]
++            val w = target.width
++            val h = target.height
++            if (!popup.isShowing) {
++                popup.width = w
++                popup.height = h
++                popup.showAtLocation(anchor, Gravity.TOP or Gravity.START, x, y)
++                rect[0] = x; rect[1] = y; rect[2] = w; rect[3] = h
++                applyBlur()
++            } else if (rect[0] != x || rect[1] != y || rect[2] != w || rect[3] != h) {
++                popup.update(x, y, w, h)
++                rect[0] = x; rect[1] = y; rect[2] = w; rect[3] = h
++                applyBlur()
++            }
++            setActive(true)
++        } catch (e: RuntimeException) {
++            // e.g. WindowManager.BadTokenException when the IME window is going away
++            Timber.w(e, "Failed to show glass backdrop, falling back to static background")
++            hide()
++            setActive(false)
++        }
++    }
++
++    @Suppress("DEPRECATION")
++    private fun applyBlur() {
++        val root = popup.contentView?.rootView ?: return
++        val lp = root.layoutParams as? WindowManager.LayoutParams ?: return
++        if (lp.blurBehindRadius == blurRadiusPx &&
++            (lp.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND) != 0
++        ) return
++        lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
++        lp.blurBehindRadius = blurRadiusPx
++        windowManager.updateViewLayout(root, lp)
++    }
++}
+diff --git a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+index 261d815..f861bd5 100644
+--- a/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
++++ b/app/src/main/java/org/fcitx/fcitx5/android/input/InputView.kt
+@@ -80,6 +80,14 @@ class InputView(
+         scaleType = ImageView.ScaleType.CENTER_CROP
+     }
+ 
++    // decoding the background image is not free, and glass backdrop may toggle it repeatedly
++    private val staticBackground by lazy { theme.backgroundDrawable(keyBorder) }
++
++    private val glassBlur by ThemeManager.prefs.glassBlur
++    private val glassBlurRadius by ThemeManager.prefs.glassBlurRadius
++
++    private var glassBackdrop: GlassBackdrop? = null
++
+     private val placeholderOnClickListener = OnClickListener { }
+ 
+     // use clickable view as padding, so MotionEvent can be split to padding view and keyboard view
+@@ -222,7 +230,7 @@ class InputView(
+ 
+         broadcaster.onImeUpdate(fcitx.runImmediately { inputMethodEntryCached })
+ 
+-        customBackground.imageDrawable = theme.backgroundDrawable(keyBorder)
++        customBackground.imageDrawable = staticBackground
+ 
+         keyboardView = constraintLayout {
+             // allow MotionEvent to be delivered to keyboard while pressing on padding views.
+@@ -263,6 +271,14 @@ class InputView(
+ 
+         updateKeyboardSize()
+ 
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && glassBlur) {
++            glassBackdrop = GlassBackdrop(this, keyboardView, theme, dp(glassBlurRadius)) { active ->
++                // when the real backdrop is on, the window behind the keyboard provides the
++                // (blurred) background, so the static one must be removed to let it show through
++                customBackground.setImageDrawable(if (active) null else staticBackground)
++            }
++        }
++
+         add(preedit.ui.root, lParams(matchParent, wrapContent) {
+             above(keyboardView)
+             centerHorizontally()
+@@ -382,7 +398,13 @@ class InputView(
+         return kawaiiBar.handleInlineSuggestions(response)
+     }
+ 
++    override fun onAttachedToWindow() {
++        super.onAttachedToWindow()
++        glassBackdrop?.start()
++    }
++
+     override fun onDetachedFromWindow() {
++        glassBackdrop?.stop()
+         advancedPrefs.unregisterOnChangeListener(onKeyboardSizeChangeListener)
+         keyboardPrefs.unregisterOnChangeListener(onKeyboardSizeChangeListener)
+         // clear DynamicScope, implies that InputView should not be attached again after detached.
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 40ef2c9..7c36548 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -105,6 +105,9 @@
+     <string name="theme">主题</string>
+     <string name="key_ripple_effect">启用按键水波纹特效</string>
+     <string name="key_border">启用按键边框</string>
++    <string name="glass_blur">实时玻璃模糊</string>
++    <string name="glass_blur_summary">模糊键盘后方的内容(需要 Android 12+)。搭配半透明主题并开启按键边框效果最佳;系统关闭模糊时会自动回退为主题背景。</string>
++    <string name="glass_blur_radius">玻璃模糊半径</string>
+     <string name="brightness">亮度</string>
+     <string name="key_radius">按键圆角半径</string>
+     <string name="text_editing_button_radius">文本编辑按钮圆角半径</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index fe1fd3a..04dfe8b 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -105,6 +105,9 @@
+     <string name="theme">Theme</string>
+     <string name="key_ripple_effect">Enable key ripple effect</string>
+     <string name="key_border">Enable key border</string>
++    <string name="glass_blur">Real-time glass blur</string>
++    <string name="glass_blur_summary">Blur the content behind the keyboard (Android 12+). Works best with a translucent theme and key border enabled. Falls back to the theme background when the system disables blur.</string>
++    <string name="glass_blur_radius">Glass blur radius</string>
+     <string name="brightness">Brightness</string>
+     <string name="key_radius">Key radius</string>
+     <string name="text_editing_button_radius">Text editing button radius</string>
+-- 
+2.43.0
+
